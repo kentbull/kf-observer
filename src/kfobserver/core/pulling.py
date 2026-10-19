@@ -67,7 +67,11 @@ def pullDo(owner, hab, url, regk=None, sn=0, timeout=5.0):
         )
         tymer = tyming.Tymer(tymth=owner.tymth, duration=timeout)
         while not tymer.expired:
-            client.service()
+            try:
+                client.service()
+            except ValueError as ex:
+                logger.info("registrar pull response parse error for %s: %s", url, ex)
+                return b""
             if client.responses:
                 response = client.respond()
                 if response.status == 200:

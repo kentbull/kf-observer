@@ -159,10 +159,15 @@ def test_health():
         ("pending", "tels", {}, 503),
         ("missing", "tels", {}, 404),
         ("http-failure", "tels", {}, 404),
+        ("malformed", "tels", {}, 404),
         ("timeout", "tels", {}, 404),
         ("success", "tels", {"sn": "bad-number"}, 500),
+        ("success", "tels", {"sn": []}, 500),
+        ("success", "tels", {"sn": {}}, 500),
         ("missing", "tels", {"sn": "bad-number"}, 404),
         ("pending", "tels", {"sn": "bad-number"}, 503),
+        ("missing", "tels", {"sn": []}, 404),
+        ("pending", "tels", {"sn": {}}, 503),
         ("cancel", "tels", {}, None),
     ],
 )
@@ -175,6 +180,7 @@ def test_ondemand_query_returns_same_request_without_stalling_scheduler(
     backendTurns = []
     pulled = []
     closed = []
+    malformed = []
     originalService = http.clienting.Client.service
     originalClose = http.clienting.Client.close
 
@@ -186,6 +192,12 @@ def test_ondemand_query_returns_same_request_without_stalling_scheduler(
     def service(client):
         if client.connector.port == registrar.servant.ha[1]:
             backendTurns.append(len(progress))
+            if outcome == "malformed" and not malformed:
+                malformed.append(client)
+                client.connector.serviceReceives = lambda: None
+                client.connector.rxbs.extend(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nG\r\n"
+                )
         originalService(client)
 
     def close(client):
@@ -293,10 +305,14 @@ def test_ondemand_query_returns_same_request_without_stalling_scheduler(
                         response = client.respond()
                         assert response is not None
                         assert response.status == status
-                        assert len(pulled) == 1
-                        assert len(set(backendTurns)) >= 4
+                        assert len(pulled) == (0 if outcome == "malformed" else 1)
+                        assert len(set(backendTurns)) >= (
+                            1 if outcome == "malformed" else 4
+                        )
                         assert len(closed) == 1
                         assert closed[0].connector.cs is None
+                        if outcome == "malformed":
+                            assert len(malformed) == 1
                         if outcome == "success" and status == 200:
                             assert response.headers["content-type"] == CESR_CONTENT_TYPE
                             assert bytes(response.body) == (
@@ -331,6 +347,25 @@ def test_ondemand_query_returns_same_request_without_stalling_scheduler(
                             assert (ripper.said in ctx.observer.pending) == (
                                 outcome == "pending"
                             )
+                            if outcome == "success":
+                                fresh = _telQuery(wallet, ripper.said, **qextra)
+                                body = bytes(
+                                    wallet.endorse(
+                                        fresh, last=True, framed=False, gvrsn=Vrsn_2_0
+                                    )
+                                )
+                                client.request(
+                                    method="POST",
+                                    path="/",
+                                    body=body,
+                                    headers={"Content-Type": CESR_CONTENT_TYPE},
+                                )
+                                for _ in range(100):
+                                    doist.recur()
+                                    if client.responses:
+                                        break
+                                assert client.respond().status == 500
+                                assert len(pulled) == 1
                     finally:
                         doist.exit()
             finally:

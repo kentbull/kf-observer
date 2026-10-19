@@ -359,6 +359,120 @@ def test_default_poll_services_http_and_delays_between_passes(
 
 
 @pytest.mark.parametrize("kind", ["registrar", "witness"])
+def test_malformed_chunk_uses_fallback_and_closes_request(monkeypatch, kind):
+    """A real HIO parse failure closes that source and the next source works."""
+    doist = Doist(tock=0.03125, real=False, limit=5.75)
+    malformed = []
+    attempts = []
+    seen = set()
+    ingested = []
+    closed = []
+    progress = []
+    originalService = http.clienting.Client.service
+    originalClose = http.clienting.Client.close
+
+    def service(client):
+        if id(client) not in seen:
+            seen.add(id(client))
+            source = (
+                "first" if client.connector.port == first.servant.ha[1] else "second"
+            )
+            attempts.append((source, doist.tyme))
+        if client.connector.port == first.servant.ha[1] and not malformed:
+            malformed.append(client)
+            client.connector.serviceReceives = lambda: None
+            client.connector.rxbs.extend(
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nG\r\n"
+            )
+        originalService(client)
+
+    def close(client):
+        closed.append(client)
+        originalClose(client)
+
+    monkeypatch.setattr(http.clienting.Client, "service", service)
+    monkeypatch.setattr(http.clienting.Client, "close", close)
+
+    class Peer:
+        def on_post(self, _req, rep):
+            rep.data = b"cesr"
+
+        def on_get(self, _req, rep):
+            rep.data = b"cesr"
+
+    class ObserverStub:
+        def pendingIssuers(self):
+            return ["issuer"]
+
+        def retryPending(self):
+            return {}
+
+        def ingest(self, raw, kvy=None):
+            assert raw == b"cesr"
+            ingested.append(raw)
+            return {}
+
+    def independentDo(tymth=None, tock=0.0, **kwa):
+        while True:
+            progress.append(tymth())
+            yield tock
+
+    firstApp = falcon.App()
+    firstApp.add_route("/", Peer())
+    firstApp.add_route("/log", Peer())
+    secondApp = falcon.App()
+    secondApp.add_route("/", Peer())
+    secondApp.add_route("/log", Peer())
+    with openHab(name="malformed-chunk", temp=True, version=Vrsn_2_0) as (
+        _hby,
+        hab,
+    ):
+        with (
+            http.serving.openServer(
+                servant=tcp.Server(ha=("127.0.0.1", 0)), app=firstApp
+            ) as first,
+            http.serving.openServer(
+                servant=tcp.Server(ha=("127.0.0.1", 0)), app=secondApp
+            ) as second,
+        ):
+            first.servant.eha = first.servant.ha
+            second.servant.eha = second.servant.ha
+            urls = [
+                f"http://127.0.0.1:{first.servant.ha[1]}/",
+                f"http://127.0.0.1:{second.servant.ha[1]}/",
+            ]
+            observer = ObserverStub()
+            if kind == "registrar":
+                poller = RegistrarPuller(hab, observer, urls=urls, regk="registry")
+            else:
+                poller = WitnessKelFetcher(
+                    observer,
+                    object(),
+                    witnesses=[{"url": url} for url in urls],
+                )
+                monkeypatch.setattr(
+                    keling, "ingestKel", lambda _kvy, raw: ingested.append(raw)
+                )
+            doist.do(
+                doers=[
+                    http.ServerDoer(first),
+                    http.ServerDoer(second),
+                    poller,
+                    doing.doify(independentDo),
+                ]
+            )
+
+    assert len(malformed) == 1
+    assert [source for source, _ in attempts[:3]] == ["first", "second", "first"]
+    assert attempts[2][1] - attempts[1][1] >= 5.0
+    assert ingested
+    assert len(progress) >= 3
+    assert len(closed) == len(attempts)
+    assert malformed[0].connector.cs is None
+    assert all(client.connector.cs is None for client in closed)
+
+
+@pytest.mark.parametrize("kind", ["registrar", "witness"])
 @pytest.mark.parametrize("failure", ["timeout", "tls", "socket", "http", "parse"])
 def test_request_failure_cleans_up_and_scheduler_continues(monkeypatch, kind, failure):
     """Transport failures stay inside the request and a later poll still runs."""

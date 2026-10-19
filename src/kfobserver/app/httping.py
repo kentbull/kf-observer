@@ -194,7 +194,7 @@ class TelQueryEnd:
             return self.ctx.observer.lastRaw(regk)
         try:
             sn = _snFromQuery(qry)
-        except InvalidValueError as ex:
+        except (InvalidValueError, TypeError) as ex:
             # Keep Falcon's existing 500 response even when rendering is deferred.
             raise falcon.HTTPInternalServerError() from ex
         return self.ctx.observer.clone(regk, sn=sn)

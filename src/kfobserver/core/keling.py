@@ -41,7 +41,13 @@ def fetchKelDo(owner, issuer, url, aid=None, timeout=5.0):
         client.request(method="GET", path=path, headers=headers)
         tymer = tyming.Tymer(tymth=owner.tymth, duration=timeout)
         while not tymer.expired:
-            client.service()
+            try:
+                client.service()
+            except ValueError as ex:
+                logger.info(
+                    "witness KEL response parse error for %s at %s: %s", issuer, url, ex
+                )
+                return b""
             if client.responses:
                 response = client.respond()
                 if response.status == 200:
