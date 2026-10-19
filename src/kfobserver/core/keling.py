@@ -28,23 +28,20 @@ def fetchKelDo(owner, issuer, url, aid=None, timeout=5.0):
     headers = {"Accept": CESR_CONTENT_TYPE}
     if aid:
         headers[CESR_DESTINATION_HEADER] = aid
-    client = http.clienting.Client(
-        scheme=purl.scheme or "http",
-        hostname=purl.hostname or "127.0.0.1",
-        port=purl.port,
-        portOptional=True,
-        tymth=owner.tymth,
-    )
+    client = None
     try:
+        client = http.clienting.Client(
+            scheme=purl.scheme or "http",
+            hostname=purl.hostname or "127.0.0.1",
+            port=purl.port,
+            portOptional=True,
+            tymth=owner.tymth,
+        )
         client.reopen()
         client.request(method="GET", path=path, headers=headers)
         tymer = tyming.Tymer(tymth=owner.tymth, duration=timeout)
         while not tymer.expired:
-            try:
-                client.service()
-            except OSError as ex:  # Includes socket errors and ssl.SSLError.
-                logger.info("witness KEL fetch error for %s at %s: %s", issuer, url, ex)
-                return b""
+            client.service()
             if client.responses:
                 response = client.respond()
                 if response.status == 200:
@@ -61,8 +58,12 @@ def fetchKelDo(owner, issuer, url, aid=None, timeout=5.0):
             yield b""
         logger.info("witness KEL fetch failed for %s at %s", issuer, url)
         return b""
+    except OSError as ex:  # Includes socket errors and ssl.SSLError.
+        logger.info("witness KEL fetch error for %s at %s: %s", issuer, url, ex)
+        return b""
     finally:
-        client.close()
+        if client is not None:
+            client.close()
 
 
 class WitnessKelFetcher(doing.DoDoer):

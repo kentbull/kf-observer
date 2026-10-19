@@ -225,20 +225,49 @@ def test_witness_search_stops_on_state_or_after_all_witnesses(
 
 
 @pytest.mark.parametrize("kind", ["registrar", "witness"])
-def test_default_poll_services_http_and_delays_between_passes(monkeypatch, kind):
+@pytest.mark.parametrize("failure", [None, "construct", "reopen"])
+def test_default_poll_services_http_and_delays_between_passes(
+    monkeypatch, kind, failure
+):
     """Real clients finish at scheduler cadence; the next pass waits five seconds."""
     doist = Doist(tock=0.03125, real=False, limit=10.0)
     requested = []
     completed = []
     progress = []
     closed = []
+    failed_at = []
+    originalClient = http.clienting.Client
     originalClose = http.clienting.Client.close
+
+    if failure == "construct":
+        attempts = []
+
+        def client(*args, **kwa):
+            attempts.append(None)
+            if len(attempts) == 1:
+                failed_at.append(doist.tyme)
+                raise OSError("connection setup failed")
+            return originalClient(*args, **kwa)
+
+        monkeypatch.setattr(http.clienting, "Client", client)
+    elif failure == "reopen":
+        originalReopen = originalClient.reopen
+        attempts = []
+
+        def reopen(client):
+            attempts.append(client)
+            if len(attempts) == 1:
+                failed_at.append(doist.tyme)
+                raise OSError("connection open failed")
+            return originalReopen(client)
+
+        monkeypatch.setattr(originalClient, "reopen", reopen)
 
     def close(client):
         closed.append(client)
         originalClose(client)
 
-    monkeypatch.setattr(http.clienting.Client, "close", close)
+    monkeypatch.setattr(originalClient, "close", close)
 
     class Peer:
         def on_post(self, req, rep):
@@ -314,13 +343,18 @@ def test_default_poll_services_http_and_delays_between_passes(monkeypatch, kind)
             doist.do(
                 doers=[http.ServerDoer(server), poller, doing.doify(independentDo)]
             )
-    assert len(requested) >= 2
+    assert len(requested) >= (2 if failure is None else 1)
     assert len(requested) == len(completed)
     assert completed[0] - requested[0] < 1.0
-    assert requested[1] - completed[0] >= 5.0
+    if failure is None:
+        assert requested[1] - completed[0] >= 5.0
+    else:
+        assert requested[0] - failed_at[0] >= 5.0
+        assert len(attempts) >= 2
+        assert any(failed_at[0] < t < requested[0] for t in progress)
     assert len([t for t in progress if requested[0] <= t <= completed[0]]) >= 3
     assert poller.interval == 5.0
-    assert len(closed) == len(completed)
+    assert len(closed) == len(completed) + (failure == "reopen")
     assert all(client.connector.cs is None for client in closed)
 
 

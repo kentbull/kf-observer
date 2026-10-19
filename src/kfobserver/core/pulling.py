@@ -49,14 +49,15 @@ def pullDo(owner, hab, url, regk=None, sn=0, timeout=5.0):
     serder = bulkQuery(hab, regk=regk, sn=sn)
     body = bytes(hab.endorse(serder, last=True, framed=False, gvrsn=Vrsn_2_0))
     purl = urlsplit(url)
-    client = http.clienting.Client(
-        scheme=purl.scheme or "http",
-        hostname=purl.hostname or "127.0.0.1",
-        port=purl.port,
-        portOptional=True,
-        tymth=owner.tymth,
-    )
+    client = None
     try:
+        client = http.clienting.Client(
+            scheme=purl.scheme or "http",
+            hostname=purl.hostname or "127.0.0.1",
+            port=purl.port,
+            portOptional=True,
+            tymth=owner.tymth,
+        )
         client.reopen()
         client.request(
             method="POST",
@@ -66,11 +67,7 @@ def pullDo(owner, hab, url, regk=None, sn=0, timeout=5.0):
         )
         tymer = tyming.Tymer(tymth=owner.tymth, duration=timeout)
         while not tymer.expired:
-            try:
-                client.service()
-            except OSError as ex:  # Includes socket errors and ssl.SSLError.
-                logger.info("registrar pull error for %s: %s", url, ex)
-                return b""
+            client.service()
             if client.responses:
                 response = client.respond()
                 if response.status == 200:
@@ -82,8 +79,12 @@ def pullDo(owner, hab, url, regk=None, sn=0, timeout=5.0):
             yield b""
         logger.info("registrar pull failed for %s", url)
         return b""
+    except OSError as ex:  # Includes socket errors and ssl.SSLError.
+        logger.info("registrar pull error for %s: %s", url, ex)
+        return b""
     finally:
-        client.close()
+        if client is not None:
+            client.close()
 
 
 class RegistrarPuller(doing.DoDoer):
