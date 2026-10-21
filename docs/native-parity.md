@@ -89,3 +89,15 @@ existing Locksmith integration covers 0, 4 and 32 prior signer rotations through
 real Qt HTTP transport. This fix leaves the separately selected full-evidence
 observer module unchanged; source and execution revisions must be recorded
 separately from earlier clean artifacts.
+
+Related upstream idea/source: Jay-Alexander Elliot's PR 2 commit
+[`68e35f2`](https://github.com/keri-foundation/kf-observer/commit/68e35f2ed22ed9e0fbdc16078f7511b399c9cc1e),
+“introduce remote signer KEL history via PUT,” already proposes this endpoint
+contract and an 8 MiB handler limit. Its exact source was inspected during the
+repair's lineage review. Our method is a separately implemented compatibility
+adapter using the retained `ingestKel` entry point and complete message-kind
+preflight; it is not a wholesale import of that PR or attribution of our new
+code to its author. The PR remains prior art for the interface and bounded
+intake approach. Its other acquisition/fallback changes retain the disposition
+explained above. Handler limits bound processing input; they are not a claim
+that HIO avoids buffering an HTTP body before Falcon dispatch.
