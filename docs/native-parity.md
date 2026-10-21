@@ -64,3 +64,28 @@ component tests. The clean multi-component story matrix is recorded separately;
 a component suite alone does not establish that outcome. Existing changed-symbol
 lineage remains the application source audit, with Git history retaining the
 individual predecessor lines and contributors.
+
+## Preserved legacy wallet KEL introduction
+
+The optional Locksmith legacy observer tests were skipped when the observer
+package was absent from the wallet-only image. Running all three against the
+installed component exposed HTTP 405: the wallet sends a signed KEL replay by
+PUT before its KRAM-authenticated query, but the inherited endpoint exposed only
+POST. The complete-evidence profile has a different bootstrap contract.
+
+`app.httping.TelQueryEnd.on_put` is a local compatibility adapter for that
+existing wallet contract. It bounds and preflights native key-event/receipt
+frames before reusing the existing `observing.ingestKel` and ordinary Kevery.
+It does not write accepted rows or authenticate a query by transport success;
+204 acknowledges intake, and POST still requires KRAM verification. Mixed
+query/TEL bodies are rejected before processing. The GET Allow list and class
+description reflect the added method. The 8 MiB bound matches the wallet's
+transport bound and is local operational policy, not a protocol constant.
+
+The new component regression uses separate signer/observer Haberies, checks
+unknown-signer refusal, signed KEL introduction, rejected mixed/empty/oversized
+or wrong-media input, then independently authenticated query behavior. The
+existing Locksmith integration covers 0, 4 and 32 prior signer rotations through
+real Qt HTTP transport. This fix leaves the separately selected full-evidence
+observer module unchanged; source and execution revisions must be recorded
+separately from earlier clean artifacts.

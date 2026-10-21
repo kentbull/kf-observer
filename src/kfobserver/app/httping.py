@@ -13,6 +13,8 @@ from keri.app.httping import CESR_ATTACHMENT_HEADER, CESR_CONTENT_TYPE
 from keri.core import Number, Parser, SerderKERI
 from keri.kering import MissingAuthAttachmentError, MissingSenderKeyStateError
 
+from kfobserver.core.observing import ingestKel
+
 
 # Fine-grained wallet/verifier routes (one registry SAID).
 QUERY_ROUTES = ("tels", "tels/head")
@@ -76,15 +78,55 @@ class HealthEnd:
 
 
 class TelQueryEnd:
-    """Signed V2 qry POST for verified TEL last / all / since sn."""
+    """Legacy bare-TEL query face with separate signed KEL introduction.
+
+    PUT supplies public key-history evidence; POST still authenticates each
+    query through KRAM. This is not the full-evidence observation profile.
+    """
 
     def __init__(self, ctx):
         self.ctx = ctx
 
     def on_get(self, _req, _rep):
+        """Reject unsigned reads and advertise the separate query/introduction methods."""
         raise falcon.HTTPMethodNotAllowed(
-            ["POST"], description="use signed CESR qry POST"
+            ["POST", "PUT"], description="use signed CESR qry POST or KEL PUT"
         )
+
+    def on_put(self, req, rep):
+        """Process a bounded native KEL replay before a wallet's signed query.
+
+        ``req`` carries CESR key events/receipts only; ``rep`` receives 204
+        after ordinary Kevery processing. That status acknowledges intake,
+        not authentication of a later query or acceptance of every dependency.
+        Preflight the complete message kinds before any processor mutation;
+        unsupported media, malformed framing or non-KEL messages return 4xx.
+        Missing evidence remains subject to the existing Kevery escrows.
+        """
+        if (req.content_type or '').split(';')[0].strip().lower() != CESR_CONTENT_TYPE:
+            raise falcon.HTTPUnsupportedMediaType()
+        limit = 8 * 1024 * 1024  # Match the wallet's bounded service transport.
+        raw = req.bounded_stream.read(limit + 1)
+        if not raw:
+            raise falcon.HTTPBadRequest(description='empty KEL body')
+        if len(raw) > limit:
+            raise falcon.HTTPContentTooLarge(description='KEL body exceeds size limit')
+        ims = bytearray(raw)
+        parser = Parser(version=Vrsn_2_0)
+        try:
+            while ims:
+                before = len(ims)
+                dom = parser.parseOne(ims=ims, processive=False)
+                serder = getattr(dom, 'serder', None)
+                if (len(ims) >= before or not isinstance(serder, SerderKERI)
+                        or serder.pvrsn != Vrsn_2_0
+                        or serder.ilk not in ('icp', 'rot', 'ixn', 'dip', 'drt', 'rct')):
+                    raise ValueError('expected complete native key events or receipts')
+            # Reuse the existing signed KEL intake; never write accepted rows here.
+            ingestKel(self.ctx.kvy, raw)
+        except Exception as ex:
+            raise falcon.HTTPBadRequest(description=str(ex)) from ex
+        rep.status = falcon.HTTP_204
 
     def on_post(self, req, rep):
         try:
