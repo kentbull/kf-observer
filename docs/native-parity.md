@@ -49,3 +49,18 @@ tests, exact-source/head freshness rejection, and a real service subprocess.
 Docker copies source and uses named volumes for LMDB. Combined Bash profiles,
 hosted witnesses and Locksmith acceptance are later gates, not established by
 this component result.
+
+## Common runtime pin and source-review boundary
+
+The additive qualification now uses KERIpy
+`993b58266992b786d044fd3938e114a19d76f62f` and this component at
+`683679889ad4b22114ebbae0a79e4b2bdb3777bb`. Earlier pins and results above are
+historical checkpoints. The package declaration and lock select the same exact
+core revision; no sibling editable source is required. The pin follow-up changes
+no application symbol or protocol policy.
+
+A fresh clone installed in the common Linux scenario image passes all 16
+component tests. The clean multi-component story matrix is recorded separately;
+a component suite alone does not establish that outcome. Existing changed-symbol
+lineage remains the application source audit, with Git history retaining the
+individual predecessor lines and contributors.
