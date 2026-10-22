@@ -18,7 +18,7 @@ from keri.db.basing import BaserDoer
 
 from kfobserver.app import httping
 from kfobserver.core.observing import Observer
-from kfobserver.core.pulling import RegistrarPuller
+from kfobserver.core.pulling import RegistrarPuller, pullDo
 
 
 logger = help.ogler.getLogger()
@@ -70,16 +70,14 @@ class Context(doing.DoDoer):
         super(Context, self).__init__(doers=[doing.doify(self.escrowDo)])
 
     def pullRegistry(self, regk):
-        """On-demand bulk pull for one registry SAID from configured registrars.
+        """Cooperative on-demand bulk pull for one registry SAID from configured registrars.
 
         Returns:
             dict | None: last non-empty ingest summary, or None if nothing pulled.
         """
-        from kfobserver.core.pulling import pullOnce
-
         summary = None
         for url in self.registrars:
-            raw = pullOnce(self.hab, url, regk=regk)
+            raw = yield from pullDo(self, self.hab, url, regk=regk)
             if raw:
                 summary = self.observer.ingest(raw, kvy=self.kvy)
         return summary
@@ -242,9 +240,7 @@ def makeContext(hby, alias="observer", registrars=None, witnesses=None, **kwa):
 
     observer = Observer(hby=hby, kvy=kvy)
 
-    registrars = _dedupeUrls(
-        list(registrars or []) + _registrarsFromConfig(hby.cf)
-    )
+    registrars = _dedupeUrls(list(registrars or []) + _registrarsFromConfig(hby.cf))
     witEntries = []
     for entry in list(witnesses or []):
         norm = _normalizeWitness(entry)
