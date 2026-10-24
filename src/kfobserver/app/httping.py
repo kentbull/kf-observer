@@ -14,6 +14,7 @@ from keri.core import Number, Parser, SerderKERI
 from keri.kering import MissingAuthAttachmentError, MissingSenderKeyStateError
 
 from kfobserver.core.observing import ingestKel
+from kfobserver.core.netting import boundedLegacyClone
 
 
 # Fine-grained wallet/verifier routes (one registry SAID).
@@ -205,7 +206,7 @@ class TelQueryEnd:
             data = self.ctx.observer.lastRaw(regk)
         else:
             sn = _snFromQuery(qry)
-            data = self.ctx.observer.clone(regk, sn=sn)
+            data = boundedLegacyClone(self.ctx.observer, regk, sn=sn)
 
         rep.set_header("Content-Type", CESR_CONTENT_TYPE)
         rep.status = falcon.HTTP_200

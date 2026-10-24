@@ -14,6 +14,7 @@ from keri import help
 from keri.app.httping import CESR_CONTENT_TYPE, CESR_DESTINATION_HEADER
 
 from kfobserver.core.observing import ingestKel
+from kfobserver.core.netting import clientLimits
 
 
 logger = help.ogler.getLogger()
@@ -49,6 +50,7 @@ def fetchKelOnce(issuer, url, aid=None, timeout=5.0):
         port=purl.port or 80,
         portOptional=True,
         timeout=timeout,
+        **clientLimits(),
     )
     try:
         client.request(method="GET", path=path, headers=headers)

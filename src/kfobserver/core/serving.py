@@ -11,12 +11,12 @@ import falcon
 from hio.base import doing
 from hio.core import http
 from keri import help
-from keri.app.indirecting import createHttpServer
 from keri.core import Kevery
 from keri.core.kraming import Kramer
 from keri.db.basing import BaserDoer
 
 from kfobserver.app import httping
+from kfobserver.core.netting import boundedHttpServer
 from kfobserver.core.observing import Observer
 from kfobserver.core.pulling import RegistrarPuller
 
@@ -309,7 +309,7 @@ def setup(
     ctx.host = advertisedHost
     ctx.port = advertisedPort
 
-    server = createHttpServer(
+    server = boundedHttpServer(
         host=host,
         port=port,
         app=ctx.app,

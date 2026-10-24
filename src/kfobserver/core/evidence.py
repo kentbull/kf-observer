@@ -1,19 +1,27 @@
 """Full-evidence observer profile over the shared KERIpy evidence core.
 
 This package owns service configuration, role policy and process lifecycle.
-KERIpy owns evidence verification, cooperative acquisition and exact-head source
-observations. The original bare-TEL adapter remains separately selectable.
+KERIpy owns evidence verification and stores.  This application owns source
+acquisition, observations, query policy, and process lifecycle.  The original
+bare-TEL adapter remains separately selectable.
 """
 from pathlib import Path
 
 import falcon
 from hio.core import http
-from keri.app.evidence_httping import HealthEnd
-from keri.app.evidence_observing import ObservedEvidence, RegistrarPuller
-from keri.app.evidence_querying import QueryEnd
-from keri.app.indirecting import createHttpServer
 from keri.db.basing import BaserDoer
 from keri.kering import ConfigurationError
+
+from kfobserver.core.evidence_observing import (
+    ObservedEvidence, RegistrarPuller, sourceTrusts)
+from kfobserver.core.evidence_querying import QueryEnd
+from kfobserver.core.netting import boundedHttpServer
+
+
+class HealthEnd:
+    """Report listener availability without making an evidence claim."""
+    def on_get(self, req, rep):
+        rep.media = {'status': 'ok'}
 
 
 class Context(ObservedEvidence):
@@ -25,7 +33,7 @@ class Context(ObservedEvidence):
         Parameters:
             hby: caller-owned habitat environment.
             readers: AIDs explicitly authorized for ACDC v2 registry cache queries.
-            **kwa: shared stores, source URLs, freshness age and KRAM settings.
+            **kwa: shared stores, source trust, freshness age and KRAM settings.
         """
         super().__init__(hby, **kwa)
         self.readers = set(readers)
@@ -36,12 +44,15 @@ class Context(ObservedEvidence):
 
 def setup(hby, *, alias="observer", host="127.0.0.1", port=6633,
           registrars=(), readers=(), kel=(), maximumAge=15.0, interval=5.0,
-          timeout=5.0, keypath=None, certpath=None, cafilepath=None):
+          timeout=5.0, registrarCafilepath=None, registrarCertedhosts=(),
+          keypath=None, certpath=None, cafilepath=None):
     """Construct the external observer runtime and verify bootstrap before bind.
 
     Parameters:
         hby: caller-owned Habery; alias: local query-signing habitat name.
         host, port: listener address; registrars: independent full-proof sources.
+        registrarCafilepath: explicit outbound source CA bundle for URL entries.
+        registrarCertedhosts: required IP=certificate-hostname mappings for IP URLs.
         readers: authorized cache requester AIDs; kel: signed bootstrap paths.
         maximumAge: positive finite source-observation age in seconds.
         interval, timeout: cooperative polling cadence and per-source deadline.
@@ -58,18 +69,20 @@ def setup(hby, *, alias="observer", host="127.0.0.1", port=6633,
     """
     if not registrars or not readers:
         raise ConfigurationError("full-evidence observer requires registrars and readers")
+    sources = sourceTrusts(registrars, cafilepath=registrarCafilepath,
+                           certedhosts=registrarCertedhosts)
     hab = hby.habByName(name=alias)
     if hab is None:
         hab = hby.makeHab(name=alias, transferable=True)
-    ctx = Context(hby, readers=readers, urls=registrars, maximumAge=maximumAge)
+    ctx = Context(hby, readers=readers, sources=sources, maximumAge=maximumAge)
     server = None
     try:
         for path in kel:
             result = ctx.ingest(Path(path).read_bytes())
             if result["rejected"] or result["pending"]:
                 raise ConfigurationError("observer bootstrap evidence is incomplete or invalid")
-        poller = RegistrarPuller(hab, ctx, registrars, interval=interval, timeout=timeout)
-        server = createHttpServer(host=host, port=port, app=ctx.app,
+        poller = RegistrarPuller(hab, ctx, sources, interval=interval, timeout=timeout)
+        server = boundedHttpServer(host=host, port=port, app=ctx.app,
             keypath=keypath, certpath=certpath, cafilepath=cafilepath)
         return ctx, [BaserDoer(baser=ctx.reger), BaserDoer(baser=ctx.observations),
                      ctx, http.ServerDoer(server=server), poller]

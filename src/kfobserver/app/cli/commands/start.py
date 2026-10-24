@@ -92,6 +92,21 @@ parser.add_argument(
     help="Registrar external base URL to poll for bulk TEL. Repeatable.",
 )
 parser.add_argument(
+    "--registrar-ca",
+    dest="registrarCa",
+    default=None,
+    help="Absolute CA bundle path for full-evidence HTTPS registrar sources.",
+)
+parser.add_argument(
+    "--registrar-certedhost",
+    action="append",
+    dest="registrarCertedhosts",
+    default=[],
+    metavar="IP=HOSTNAME",
+    help=("Required certificate hostname for a full-evidence registrar IP URL. "
+          "Repeatable; DNS URLs use their URL hostname."),
+)
+parser.add_argument(
     "--witness",
     action="append",
     dest="witnesses",
@@ -214,7 +229,9 @@ def runObserver(args, expire=0.0):
             ctx, workers = evidence.setup(hby, alias=args.alias, host=args.host,
                 port=int(args.http), registrars=args.registrars, readers=args.reader,
                 kel=args.kel, maximumAge=args.maximum_age, interval=args.poll,
-                timeout=args.timeout, keypath=args.keypath, certpath=args.certpath,
+                timeout=args.timeout, registrarCafilepath=args.registrarCa,
+                registrarCertedhosts=args.registrarCertedhosts,
+                keypath=args.keypath, certpath=args.certpath,
                 cafilepath=args.cafilepath)
             doers.extend(workers)
         else:

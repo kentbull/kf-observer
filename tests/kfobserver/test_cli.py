@@ -5,7 +5,11 @@ from uuid import uuid4
 import socket
 import subprocess
 import time
+from pathlib import Path
 from urllib.request import urlopen
+
+
+SERVER_TLS = Path(__file__).parents[1] / 'tls' / 'server.pem'
 
 
 def port():
@@ -30,7 +34,10 @@ def test_installed_cli_runs_its_own_http_service(tmp_path):
             "kf-observer", "start", "--name", "cli-parity", "--base", "cli-" + uuid4().hex,
             "--alias", "observer", "--http", str(external),
             "--reader", "explicit-unused-test-role",
-            "--registrar", "http://127.0.0.1:1/", "--timeout", "0.1", "--full-evidence", "--no-prompt"],
+            "--registrar", "https://127.0.0.1:1/",
+            "--registrar-ca", str(SERVER_TLS),
+            "--registrar-certedhost", "127.0.0.1=localhost",
+            "--timeout", "0.1", "--full-evidence", "--no-prompt"],
             env=env, stdout=output, stderr=subprocess.STDOUT)
         try:
             deadline = time.monotonic() + 15
