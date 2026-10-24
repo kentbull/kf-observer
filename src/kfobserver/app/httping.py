@@ -94,7 +94,7 @@ class TelQueryEnd:
         )
 
     def on_put(self, req, rep):
-        """Process a bounded native KEL replay before a wallet's signed query.
+        """Process a bounded CESR-framed KEL replay before a wallet's signed query.
 
         ``req`` carries CESR key events/receipts only; ``rep`` receives 204
         after ordinary Kevery processing. That status acknowledges intake,
@@ -121,7 +121,7 @@ class TelQueryEnd:
                 if (len(ims) >= before or not isinstance(serder, SerderKERI)
                         or serder.pvrsn != Vrsn_2_0
                         or serder.ilk not in ('icp', 'rot', 'ixn', 'dip', 'drt', 'rct')):
-                    raise ValueError('expected complete native key events or receipts')
+                    raise ValueError('expected complete CESR-framed key events or receipts')
             # Reuse the existing signed KEL intake; never write accepted rows here.
             ingestKel(self.ctx.kvy, raw)
         except Exception as ex:

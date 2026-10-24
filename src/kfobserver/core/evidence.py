@@ -1,4 +1,4 @@
-"""Full-evidence observer profile over the shared, qualified native core.
+"""Full-evidence observer profile over the shared KERIpy evidence core.
 
 This package owns service configuration, role policy and process lifecycle.
 KERIpy owns evidence verification, cooperative acquisition and exact-head source
@@ -24,7 +24,7 @@ class Context(ObservedEvidence):
 
         Parameters:
             hby: caller-owned habitat environment.
-            readers: AIDs explicitly authorized for native cache queries.
+            readers: AIDs explicitly authorized for ACDC v2 registry cache queries.
             **kwa: shared stores, source URLs, freshness age and KRAM settings.
         """
         super().__init__(hby, **kwa)
