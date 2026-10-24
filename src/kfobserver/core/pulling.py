@@ -15,6 +15,8 @@ from keri.app.httping import CESR_CONTENT_TYPE
 from keri.core import query
 from keri.help import helping
 
+from kfobserver.core.netting import clientLimits
+
 
 logger = help.ogler.getLogger()
 
@@ -74,6 +76,7 @@ def pullOnce(hab, url, regk=None, sn=0, timeout=5.0):
         port=purl.port or 80,
         portOptional=True,
         timeout=timeout,
+        **clientLimits(),
     )
     try:
         client.request(

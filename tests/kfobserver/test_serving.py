@@ -219,3 +219,30 @@ def test_ondemand_pull_pending_returns_503(monkeypatch):
             assert ripper.said in ctx.observer.pending
         finally:
             ctx.observer.close()
+
+
+def test_wallet_introduction_is_separate_from_query_authentication():
+    """Real KEL PUT enables a foreign signer; mixed query input cannot mutate it."""
+    with openHby(name="query-source", temp=True, version=Vrsn_2_0) as source, \
+            openHby(name="query-observer", temp=True, version=Vrsn_2_0) as target:
+        wallet = source.makeHab(name="wallet")
+        wallet.rotate(gvrsn=Vrsn_2_0)
+        ctx = makeContext(target)
+        try:
+            client = testing.TestClient(ctx.app)
+            query = _telQuery(wallet, "E" + "B" * 43)
+            signed = bytes(wallet.endorse(query, last=True, framed=False, gvrsn=Vrsn_2_0))
+            kel = bytes(wallet.replay(gvrsn=Vrsn_2_0))
+            headers = {"Content-Type": CESR_CONTENT_TYPE}
+            assert client.simulate_post("/", body=signed, headers=headers).status_code == 401
+            assert client.simulate_put("/", body=kel + signed, headers=headers).status_code == 400
+            assert wallet.pre not in target.kevers
+            assert client.simulate_put("/", body=b"", headers=headers).status_code == 400
+            assert client.simulate_put("/", body=kel, content_type="application/json").status_code == 415
+            assert client.simulate_put("/", body=b"x" * (8 * 1024 * 1024 + 1), headers=headers).status_code == 413
+            assert client.simulate_put("/", body=kel, headers=headers).status_code == 204
+            assert target.kevers[wallet.pre].serder.said == wallet.kever.serder.said
+            # A fresh query now authenticates and reaches the ordinary unknown-TEL result.
+            assert _postCesr(client, wallet, _telQuery(wallet, "E" + "C" * 43)).status_code == 404
+        finally:
+            ctx.observer.close()
