@@ -20,7 +20,7 @@ not globally proven publication time or an additional KRAM timing condition.
 Base: keri-foundation/kf-observer `d6368aef9497452f5aa2a0657abe1adf5645c69b`.
 Git records Evan Asakawa as author of that base; attribution is source lineage,
 not responsibility for this fork's changes. Retained service/CLI and original tests derive from that upstream source.
-Shared KERIpy pin: `ae144adbadc10aa40a057d600fd4546f08275e1d`.
+Shared KERIpy pin: `993b58266992b786d044fd3938e114a19d76f62f`.
 No editable sibling resolves in the new lock; multidict 6.9.1 is core-required.
 
 | Changed symbols | Lineage / decision |
@@ -42,28 +42,14 @@ are not adopted. Witness fallback is deferred for the complete-proof profile:
 authenticated witness evidence must be supplied by the source, not inferred from
 an endpoint's availability. Original upstream fallback remains in the old profile.
 
-## Checks
+## Runtime dependency and component checks
 
-Sixteen installed-package tests pass in Linux, including all fourteen original
-tests, exact-source/head freshness rejection, and a real service subprocess.
-Docker copies source and uses named volumes for LMDB. Combined Bash profiles,
-hosted witnesses and Locksmith acceptance are later gates, not established by
-this component result.
-
-## Common runtime pin and source-review boundary
-
-The additive qualification now uses KERIpy
-`993b58266992b786d044fd3938e114a19d76f62f` and this component at
-`683679889ad4b22114ebbae0a79e4b2bdb3777bb`. Earlier pins and results above are
-historical checkpoints. The package declaration and lock select the same exact
-core revision; no sibling editable source is required. The pin follow-up changes
-no application symbol or protocol policy.
-
-A fresh clone installed in the common Linux scenario image passes all 16
-component tests. The clean multi-component story matrix is recorded separately;
-a component suite alone does not establish that outcome. Existing changed-symbol
-lineage remains the application source audit, with Git history retaining the
-individual predecessor lines and contributors.
+The package declaration and lock retain KERIpy
+`993b58266992b786d044fd3938e114a19d76f62f`; no editable sibling or experiment
+checkout is required. Run `python -m pytest -q tests` with the installed package
+and declared dependencies. Tests remain with this service, including real
+process/socket and authenticated evidence regressions. Cross-repository
+qualification and its image construction are owned by the experiment repository.
 
 ## Preserved legacy wallet KEL introduction
 
@@ -101,3 +87,11 @@ code to its author. The PR remains prior art for the interface and bounded
 intake approach. Its other acquisition/fallback changes retain the disposition
 explained above. Handler limits bound processing input; they are not a claim
 that HIO avoids buffering an HTTP body before Falcon dispatch.
+
+## Experiment ownership
+
+Cross-repository recipes, external acceptance scenarios and dated evidence are
+owned by the independent `keri-v2` experiment repository. They are not required
+to run this component. [Pre-extraction record](https://github.com/kentbull/kf-observer/blob/987d4d3bc17e4df24d99c82415a51cceae019687/docs/native-parity.md) preserves the
+historical source and execution scope. The extraction changes ownership only;
+runtime dependencies and verification contracts remain unchanged.
