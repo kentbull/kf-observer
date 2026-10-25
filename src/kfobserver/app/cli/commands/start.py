@@ -8,14 +8,15 @@ kfobserver.app.cli.commands.start module
 import argparse
 import logging
 import sys
+import os
 
 from hio.base import doing
 from keri import __version__, help
 from keri.app import Configer, Habery, HaberyDoer, Keeper
 from keri.cli.common.existing import setupHby
-from keri.kering import AuthError, Vrsn_2_0
+from keri.kering import AuthError, ConfigurationError, Vrsn_2_0
 
-from kfobserver.core import serving
+from kfobserver.core import serving, evidence
 
 
 d = "Runs KERI Foundation observer controller.\n"
@@ -68,7 +69,7 @@ parser.add_argument(
     "-p",
     help="22 character encryption passcode for keystore (is not saved)",
     dest="bran",
-    default=None,
+    default=os.getenv("KLI_KEYSTORE_PASSCODE"),
 )
 parser.add_argument(
     "--config-dir",
@@ -91,6 +92,21 @@ parser.add_argument(
     help="Registrar external base URL to poll for bulk TEL. Repeatable.",
 )
 parser.add_argument(
+    "--registrar-ca",
+    dest="registrarCa",
+    default=None,
+    help="Absolute CA bundle path for full-evidence HTTPS registrar sources.",
+)
+parser.add_argument(
+    "--registrar-certedhost",
+    action="append",
+    dest="registrarCertedhosts",
+    default=[],
+    metavar="IP=HOSTNAME",
+    help=("Required certificate hostname for a full-evidence registrar IP URL. "
+          "Repeatable; DNS URLs use their URL hostname."),
+)
+parser.add_argument(
     "--witness",
     action="append",
     dest="witnesses",
@@ -108,6 +124,14 @@ parser.add_argument(
     type=float,
     help="Seconds between full-clone registrar polls. Default is 5.0.",
 )
+parser.add_argument("--full-evidence", action="store_true",
+                    help="Use independent complete-proof polling and cache-only queries.")
+parser.add_argument("--reader", action="append", default=[], help="Authorized reader AID.")
+parser.add_argument("--kel", action="append", default=[], help="Signed KEL bootstrap path.")
+parser.add_argument("--maximum-age", type=float, default=15.0,
+                    help="Maximum completed-source observation age in seconds.")
+parser.add_argument("--timeout", type=float, default=5.0,
+                    help="Per-source cooperative HTTP deadline in seconds.")
 parser.add_argument(
     "--loglevel",
     action="store",
@@ -154,7 +178,14 @@ def launch(args):
 
 
 def runObserver(args, expire=0.0):
-    """Set up Habery and run the observer until expiry."""
+    """Run the selected observer profile with a caller-specified HIO time limit.
+
+    Parameters:
+        args: parsed policy, identity, transport and optional full-evidence flags.
+        expire: seconds until normal completion; zero runs until cancellation.
+    The original adapter remains the default. The complete-evidence profile
+    uses separate reader authorization and independent source acquisition.
+    """
     noPrompt = args.noPrompt if args.noPrompt is not None else not sys.stdin.isatty()
 
     ks = Keeper(name=args.name, base=args.base, temp=False, reopen=True)
@@ -172,6 +203,7 @@ def runObserver(args, expire=0.0):
         )
 
     hby = None
+    ctx = None
     try:
         if aeid is None:
             hby = Habery(name=args.name, base=args.base, bran=args.bran, cf=cf, version=Vrsn_2_0)
@@ -191,24 +223,28 @@ def runObserver(args, expire=0.0):
 
         hbyDoer = HaberyDoer(habery=hby)
         doers = [hbyDoer]
-        doers.extend(
-            serving.setup(
-                hby=hby,
-                alias=args.alias,
-                host=args.host,
-                port=int(args.http),
-                registrars=args.registrars,
-                witnesses=args.witnesses,
-                pollTock=float(args.poll),
-                keypath=args.keypath,
-                certpath=args.certpath,
-                cafilepath=args.cafilepath,
-            )
-        )
+        if args.full_evidence:
+            if args.witnesses:
+                raise ConfigurationError("full-evidence profile obtains witness evidence from registrar streams")
+            ctx, workers = evidence.setup(hby, alias=args.alias, host=args.host,
+                port=int(args.http), registrars=args.registrars, readers=args.reader,
+                kel=args.kel, maximumAge=args.maximum_age, interval=args.poll,
+                timeout=args.timeout, registrarCafilepath=args.registrarCa,
+                registrarCertedhosts=args.registrarCertedhosts,
+                keypath=args.keypath, certpath=args.certpath,
+                cafilepath=args.cafilepath)
+            doers.extend(workers)
+        else:
+            doers.extend(serving.setup(hby=hby, alias=args.alias, host=args.host,
+                port=int(args.http), registrars=args.registrars, witnesses=args.witnesses,
+                pollTock=float(args.poll), keypath=args.keypath,
+                certpath=args.certpath, cafilepath=args.cafilepath))
 
         tock = 0.00125
         doist = doing.Doist(limit=expire, tock=tock, real=True)
         doist.do(doers=doers)
     finally:
+        if ctx is not None:
+            ctx.close()
         if hby is not None:
             hby.close()
