@@ -125,7 +125,6 @@ def test_cache_queries_require_current_source_and_exact_observed_head():
         controller = issuer.makeHab(name="issuer")
         reader = receiver.makeHab(name="reader")
         rip, bup, credential, raw = issuedEvidence(controller)
-        foot = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
         url = "https://independent-source/"
         ctx = Context(receiver, readers=[reader.pre], sources=[trust(url)], maximumAge=3)
         try:
@@ -332,6 +331,53 @@ def test_replayed_body_under_wrong_identity_does_not_stop_later_source():
         finally:
             impostor.close()
             authentic.close()
+            ctx.close()
+
+
+@pytest.mark.parametrize('failure', ['setup', 'malformed-response'])
+def test_failed_source_request_does_not_stop_later_source(monkeypatch, failure):
+    """A client setup or parser failure must not block another trusted source."""
+    with (openHby(name='failed-source-issuer', temp=True, version=Vrsn_2_0) as issuer,
+          openHby(name='failed-source-observer', temp=True, version=Vrsn_2_0) as receiver):
+        controller = issuer.makeHab(name='issuer')
+        requester = receiver.makeHab(name='observer')
+        rip, bup, _, raw = issuedEvidence(controller)
+        first = tlsServer(raw)
+        second = tlsServer(raw)
+        badUrl = f'https://127.0.0.1:{first.servant.ha[1]}/'
+        goodUrl = f'https://127.0.0.1:{second.servant.ha[1]}/'
+        sources = [SourceTrust.fromConfig(trust(url, certedhost='localhost'))
+                   for url in (badUrl, goodUrl)]
+        ctx = Context(receiver, readers=[requester.pre], sources=sources)
+        puller = RegistrarPuller(requester, ctx, sources, interval=10, timeout=.5)
+        realClient = http.clienting.Client
+
+        def client(*args, **kwa):
+            if kwa.get('port') == first.servant.ha[1]:
+                if failure == 'setup':
+                    raise OSError('source setup failed')
+                result = realClient(*args, **kwa)
+
+                def malformed():
+                    raise ValueError('malformed HTTP response')
+
+                result.service = malformed
+                return result
+            return realClient(*args, **kwa)
+
+        monkeypatch.setattr(http.clienting, 'Client', client)
+        try:
+            doing.Doist(real=True, tock=.01, limit=.8).do(doers=[
+                http.ServerDoer(server=first), http.ServerDoer(server=second), puller])
+            assert 'transport_error' in puller.results[0][1]
+            assert puller.results[0][0] == badUrl
+            assert puller.results[1][0] == goodUrl
+            assert ctx.observations.observations.get((goodUrl,)).heads[rip.said] == bup.said
+            assert ctx.observations.observations.get((badUrl,)) is None
+            assert puller.client is None
+        finally:
+            first.close()
+            second.close()
             ctx.close()
 
 

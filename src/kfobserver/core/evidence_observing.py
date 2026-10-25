@@ -198,7 +198,7 @@ class SourceClientDoer(http.clienting.ClientDoer):
     def recur(self, tyme):
         try:
             return super().recur(tyme)
-        except OSError as error:
+        except (OSError, ValueError) as error:
             self.error = error
             return True
 
@@ -226,14 +226,16 @@ class RegistrarPuller(doing.DoDoer):
             for source in self.sources:
                 url = source.url
                 target = urlsplit(url)
-                client = http.clienting.Client(
-                    scheme='https', hostname=target.hostname, port=target.port or 443,
-                    cafilepath=source.cafilepath, certedhost=source.certedhost,
-                    redirectable=False)
-                doer = SourceClientDoer(client=client)
-                self.client = client
-                self.extend([doer])
+                client = None
+                doer = None
                 try:
+                    client = http.clienting.Client(
+                        scheme='https', hostname=target.hostname, port=target.port or 443,
+                        cafilepath=source.cafilepath, certedhost=source.certedhost,
+                        redirectable=False)
+                    doer = SourceClientDoer(client=client)
+                    self.extend([doer])
+                    self.client = client
                     client.request(method='POST', path=target.path or '/',
                         headers={'Content-Type': CESR_CONTENT_TYPE},
                         body=signedQuery(self.hab, 'tels/bulk'))
@@ -258,8 +260,10 @@ class RegistrarPuller(doing.DoDoer):
                 except OSError as error:
                     self.results.append((url, {'transport_error': str(error)}))
                 finally:
-                    self.remove([doer])
-                    client.close()
+                    if doer is not None and doer in self.doers:
+                        self.remove([doer])
+                    if client is not None:
+                        client.close()
                     self.client = None
             while self.tyme < started + self.interval:
                 yield tock
