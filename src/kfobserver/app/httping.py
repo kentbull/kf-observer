@@ -61,12 +61,12 @@ class _KELReplayParser(Parser):
             self.errors.append(ex)
             raise
 
-    def msgProcess(self, exts, kvy, tvy, exc, rvy, vry):
+    def msgProcess(self, exts, kvy, tvy, exc, rvy, vry, rgy=None, scy=None):
         try:
             serder = exts["serder"]
             if serder.said in kvy.db.kels.get(keys=serder.pre, on=serder.sn):
                 return None
-            return super().msgProcess(exts, kvy, tvy, exc, rvy, vry)
+            return super().msgProcess(exts, kvy, tvy, exc, rvy, vry, rgy=rgy, scy=scy)
         except Exception as ex:
             self.errors.append(ex)
             raise

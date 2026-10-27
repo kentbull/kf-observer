@@ -107,6 +107,36 @@ Witness `GET /log` is a **fallback** when bulk TEL arrives without a usable
 issuer KEL. Prefer registrar bulk that already includes the KEL (minted TELs
 and admin `POST /ingest`).
 
+### Full-evidence profile
+
+The full-evidence profile polls complete registrar proof streams on a fixed
+cadence and serves only cached evidence whose exact accepted registry head has
+a recent completed source observation. A wallet query never starts or speeds up
+a source poll.
+
+Each outbound registrar source must be HTTPS and have an explicit CA bundle.
+DNS URLs use the URL hostname for certificate verification. An IP URL also
+requires an operator-owned `IP=HOSTNAME` certificate identity mapping. These
+outbound trust settings are separate from `--keypath`, `--certpath`, and
+`--cafilepath`, which configure the observer's listener.
+
+```bash
+kf-observer start \
+  --full-evidence \
+  --alias observer \
+  --reader '<authorized-reader-AID>' \
+  --registrar https://127.0.0.1:6632/ \
+  --registrar-ca /absolute/path/to/registrar-ca.pem \
+  --registrar-certedhost 127.0.0.1=registrar.example \
+  --maximum-age 15 \
+  --timeout 5
+```
+
+Repeat `--registrar` for each source. `--registrar-ca` applies to URL entries
+from the CLI; repeat `--registrar-certedhost` for each distinct IP connector.
+Plain HTTP, missing or relative CA files, unused IP mappings, redirects, and
+certificate identity failures are rejected without recording freshness.
+
 ## Tests
 
 ```bash
