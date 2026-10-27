@@ -167,14 +167,20 @@ class ObservedEvidence(EvidenceContext):
         self.observations = observations if observations is not None else ObservationBaser(
             name=hby.name, base=hby.base, temp=hby.temp)
 
+    def pendingInScope(self, regks):
+        """Find unresolved TEL ordinals in this scope, ignoring accepted slots."""
+        scope = set(regks)
+        return any(keys[0] in scope and self.store.seqSaider(keys[0], sn) is None
+                   for escrow in (self.reger.maes, self.reger.ooes)
+                   for keys, sn, _ in escrow.getTopItemIter())
+
     def observe(self, url, raw):
-        """Record freshness only after a complete configured-source pull."""
+        """Record a complete pull over returned and prior successful URL membership."""
         result = self.ingest(raw)
-        pending = any(self.store.seqSaider(keys[0], sn) is None
-                      for escrow in (self.reger.maes, self.reger.ooes)
-                      for keys, sn, _ in escrow.getTopItemIter())
         previous = self.observations.observations.get((url,))
         heads = result['heads']
+        scope = set(heads) | (set(previous.heads) if previous else set())
+        pending = self.pendingInScope(scope)
         complete = not previous or set(previous.heads).issubset(heads)
         complete = complete and all(self.store.head(regk).qb64 == said
                                     for regk, said in heads.items())

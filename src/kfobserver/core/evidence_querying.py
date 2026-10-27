@@ -19,12 +19,10 @@ class QueryEnd:
         regk = qry.get('i')
         if not isinstance(regk, str) or not regk or 'vcid' in qry:
             raise falcon.HTTPBadRequest(description='q.i must identify one registry')
+        if self.ctx.pendingInScope((regk,)):
+            raise falcon.HTTPServiceUnavailable(
+                description='registry dependencies are pending')
         if self.ctx.store.head(regk) is None:
-            if any(keys[0] == regk
-                   for escrow in (self.ctx.reger.maes, self.ctx.reger.ooes)
-                   for keys, _, _ in escrow.getTopItemIter()):
-                raise falcon.HTTPServiceUnavailable(
-                    description='registry dependencies are pending')
             raise falcon.HTTPNotFound(
                 description='unknown registry in local observer cache')
         sn = qry.get('sn', 0)

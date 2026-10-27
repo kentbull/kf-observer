@@ -13,7 +13,10 @@ from keri import Vrsn_2_0
 from keri.acdc import acdcmap, blindate, regcept
 from keri.acdc.regbasing import RegBaser
 from keri.app.evidencing import EvidenceContext, signedQuery
-from keri.app.habbing import openHby
+from keri.app.habbing import Habery, openHby
+from keri.app.keeping import Keeper
+from keri.app.configing import Configer
+from keri.db.basing import Baser
 from keri.app.httping import CESR_CONTENT_TYPE
 from keri.core import Blinder, Counter, Codens, Parser, SerderACDC
 from keri.db import dbing, koming
@@ -432,47 +435,106 @@ def test_source_rotation_requires_a_new_completed_observation(tmp_path):
             second.close()
 
 
-def test_pending_evidence_reopens_without_claiming_freshness(tmp_path):
-    """Recover accepted TEL state after KEL arrival without inventing an observation."""
-    url = 'https://registrar.example/evidence'
-    with openHby(name='pending-source', version=Vrsn_2_0) as issuer, \
-            openHby(name='pending-observer', headDirPath=str(tmp_path),
-                    temp=False, version=Vrsn_2_0) as receiver:
+@pytest.mark.parametrize('accepted_prefix', [False, True])
+def test_pending_evidence_reopens_without_claiming_freshness(tmp_path, accepted_prefix):
+    """Isolate source scopes while pending successors invalidate only their registry."""
+    url, otherUrl = 'https://registrar.example/evidence', 'https://other.example/evidence'
+    with (openHby(name='pending-source', version=Vrsn_2_0) as issuer,
+          openHby(name='independent-source', version=Vrsn_2_0) as other):
         controller = issuer.makeHab(name='issuer')
-        reader = receiver.makeHab(name='reader')
-        rip, upd, _, raw = issuedEvidence(controller)
-        tel = raw[len(controller.replay(gvrsn=Vrsn_2_0)):]
+        rip, upd, credential, raw = issuedEvidence(controller)
+        otherRip, otherUpd, _, otherRaw = issuedEvidence(other.makeHab(name='other'))
+        before = bytes(controller.replay(gvrsn=Vrsn_2_0))
+        empty = Counter.enclose(qb64=b'', code=Codens.AttachmentGroup, version=Vrsn_2_0)
+        opening = Blinder.blind(acdc=credential.said, state='revoked')
+        successor = blindate(rip.said, upd.said, opening.said, sn=2)
+        controller.interact(data=[dict(s=successor.sad['n'], d=successor.said)])
+        tail = successor.raw + Counter.enclose(qb64=Blinder.enclose([opening]),
+            code=Codens.AttachmentGroup, version=Vrsn_2_0)
+        complete = bytes(controller.replay(gvrsn=Vrsn_2_0)) + raw[len(before):] + tail
 
         def context():
-            return Context(
-                receiver,
-                readers=[reader.pre],
-                sources=[trust(url)],
-                reger=RegBaser(
-                    name='pending', headDirPath=str(tmp_path), temp=False),
-                observations=ObservationBaser(
-                    name='pending', headDirPath=str(tmp_path), temp=False),
-            )
+            """Reopen every cache owner, including config and signing keys, under this test."""
+            kwa = dict(name='pending-observer', base='test', temp=False,
+                       headDirPath=str(tmp_path), reopen=True)
+            receiver = Habery(name=kwa['name'], base=kwa['base'], temp=True, version=Vrsn_2_0,
+                ks=Keeper(**kwa), db=Baser(**kwa), cf=Configer(**kwa))
+            reader = receiver.habByName('reader') or receiver.makeHab(name='reader')
+            ctx = Context(receiver, readers=[reader.pre], sources=[trust(url), trust(otherUrl)],
+                reger=RegBaser(**kwa), observations=ObservationBaser(**kwa), maximumAge=30)
+            assert all(Path(owner.path).is_relative_to(tmp_path)
+                       for owner in (receiver.ks, receiver.db, receiver.cf, ctx.reger, ctx.observations))
+            return receiver, reader, ctx
 
-        first = context()
+        def request(ctx, reader, regid):
+            return testing.TestClient(ctx.app).simulate_post('/',
+                headers={'Content-Type': CESR_CONTENT_TYPE},
+                body=signedQuery(reader, 'tels', {'i': regid}))
+
+        receiver, reader, first = context()
         try:
-            result = first.observe(url, tel)
-            assert result['pending'] and not result['accepted']
-            assert first.observations.observations.get((url,)) is None
+            if accepted_prefix:
+                assert not first.observe(url, raw)['pending']
+                assert request(first, reader, rip.said).status_code == 200
+            prior = first.observations.observations.get((url,))
+            result = first.observe(url, tail if accepted_prefix else raw[len(before):] + tail)
+            assert result['pending'] and not result['rejected']
+            assert first.observations.observations.get((url,)) == prior
+            assert request(first, reader, rip.said).status_code == 503
+            result = first.observe(otherUrl, otherRaw)
+            assert not result['pending'] and not result['rejected']
+            assert result['heads'] == {otherRip.said: otherUpd.said}
+            observedOther = first.observations.observations.get((otherUrl,))
+            assert observedOther is not None
+            assert request(first, reader, otherRip.said).status_code == 200
         finally:
             first.close()
+            receiver.close()
 
-        second = context()
+        receiver, reader, second = context()
         try:
+            assert second.observations.observations.get((url,)) == prior
+            assert second.observations.observations.get((otherUrl,)) == observedOther
+            assert request(second, reader, rip.said).status_code == 503
+            assert request(second, reader, otherRip.said).status_code == 200
+            assert not second.observe(otherUrl, otherRaw)['pending']
+            # Ordinary KEL arrival accepts A's TEL, but does not complete a source pull.
             assert not second.ingest(controller.replay(gvrsn=Vrsn_2_0))['rejected']
-            assert second.store.headEvent(rip.said).said == upd.said
-            assert second.observations.observations.get((url,)) is None
-            response = testing.TestClient(second.app).simulate_post(
-                '/', headers={'Content-Type': CESR_CONTENT_TYPE},
-                body=signedQuery(reader, 'tels', {'i': rip.said}))
-            assert response.status_code == 503
+            assert second.store.headEvent(rip.said).said == successor.said
+            assert second.observations.observations.get((url,)) == prior
+            assert request(second, reader, rip.said).status_code == 503
+            assert not second.observe(url, raw)['rejected']  # stale prefix cannot renew
+            assert second.observations.observations.get((url,)) == prior
+            assert not second.observe(url, complete)['pending']
+            assert request(second, reader, rip.said).status_code == 200
+            # An unanchored rival at an accepted ordinal must not suppress its accepted chain.
+            rival = blindate(rip.said, rip.said,
+                Blinder.blind(acdc=credential.said, state='revoked').said)
+            assert second.ingest(rival.raw + empty)['pending']
+            assert not second.observe(url, complete)['pending']
+            assert request(second, reader, rip.said).status_code == 200
+            assert second.reger.maes.get(keys=rip.said, on=1)
+            # A source may expand its scope, but later omitting prior members cannot renew it.
+            assert not second.observe(otherUrl, complete + otherRaw)['pending']
+            membership = second.observations.observations.get((otherUrl,))
+            assert membership.heads == {rip.said: successor.said, otherRip.said: otherUpd.said}
+            assert not second.observe(otherUrl, otherRaw)['pending']
+            assert second.observations.observations.get((otherUrl,)) == membership
         finally:
             second.close()
+            receiver.close()
+
+        receiver, reader, third = context()
+        try:
+            assert third.observations.observations.get((otherUrl,)) == membership
+            assert third.store.seqEvent(rip.said, 1).said == upd.said
+            assert third.store.headEvent(rip.said).said == successor.said
+            assert third.reger.maes.get(keys=rip.said, on=1)
+            assert request(third, reader, rip.said).status_code == 200
+            assert request(third, reader, otherRip.said).status_code == 200
+        finally:
+            third.close()
+            receiver.close()
 
 
 @pytest.mark.parametrize('value', [0, -1, float('nan'), float('inf')])
