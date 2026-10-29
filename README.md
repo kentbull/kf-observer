@@ -128,14 +128,13 @@ kf-observer start \
   --registrar https://127.0.0.1:6632/ \
   --registrar-ca /absolute/path/to/registrar-ca.pem \
   --registrar-certedhost 127.0.0.1=registrar.example \
-  --maximum-age 15 \
   --timeout 5
 ```
 
 Repeat `--registrar` for each source. `--registrar-ca` applies to URL entries
 from the CLI; repeat `--registrar-certedhost` for each distinct IP connector.
 Plain HTTP, missing or relative CA files, unused IP mappings, redirects, and
-certificate identity failures are rejected without recording freshness.
+certificate identity failures are rejected without recording a successful source acquisition.
 
 ## Tests
 

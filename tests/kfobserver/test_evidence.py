@@ -121,15 +121,15 @@ def publicOpening(raw, event):
     return b''.join(item.qb64b for item in found[0])
 
 
-def test_cache_queries_require_current_source_and_exact_observed_head():
-    """Reject unknown, unobserved, obsolete-source and stale cache answers."""
+def test_cache_queries_serve_accepted_evidence_without_observation_age():
+    """Reject unknown registries and serve accepted evidence independently of acquisition timestamps."""
     with (openHby(name="source", version=Vrsn_2_0) as issuer,
           openHby(name="observer", version=Vrsn_2_0) as receiver):
         controller = issuer.makeHab(name="issuer")
         reader = receiver.makeHab(name="reader")
         rip, bup, credential, raw = issuedEvidence(controller)
         url = "https://independent-source/"
-        ctx = Context(receiver, readers=[reader.pre], sources=[trust(url)], maximumAge=3)
+        ctx = Context(receiver, readers=[reader.pre], sources=[trust(url)])
         try:
             client = testing.TestClient(ctx.app)
 
@@ -141,18 +141,16 @@ def test_cache_queries_require_current_source_and_exact_observed_head():
             assert request().status_code == 404
             assert ctx.registries() == []
             assert not ctx.ingest(raw)["rejected"]
-            assert request().status_code == 503
+            assert request().status_code == 200
             assert not ctx.observe("https://obsolete-source/", raw)["rejected"]
-            assert request().status_code == 503
+            assert request().status_code == 200
             assert not ctx.observe(url, raw)["rejected"]
             response = request()
             assert response.status_code == 200
-            assert response.headers["observer-registry-head"] == bup.said
-            # Historical accepted evidence remains intact, but an expired
-            # receiver observation cannot authorize a fresh cache response.
+            # Local acquisition age does not alter protocol evidence acceptance.
             old = helping.toIso8601(helping.nowUTC() - timedelta(seconds=30))
             ctx.observations.observations.pin((url,), Observation(old, {rip.said: bup.said}))
-            assert request().status_code == 503
+            assert request().status_code == 200
             assert ctx.store.headEvent(rip.said).said == bup.said
             assert not ctx.observe(url, raw)["rejected"]
             opening = Blinder.blind(acdc=credential.said, state='revoked')
@@ -162,7 +160,7 @@ def test_cache_queries_require_current_source_and_exact_observed_head():
                 code=Codens.AttachmentGroup, version=Vrsn_2_0)
             assert not ctx.ingest(controller.replay(gvrsn=Vrsn_2_0)
                                   + revoked.raw + opened)["rejected"]
-            assert request().status_code == 503  # old observation names the former head
+            assert request().status_code == 200  # ordinary acceptance advances the served head
         finally:
             ctx.close()
 
@@ -180,7 +178,7 @@ def test_public_bup_opening_survives_observer_requery_and_store_reopen(tmp_path)
         observations = ObservationBaser(
             name='opening-observer', headDirPath=str(tmp_path), temp=False)
         first = Context(receiver, readers=[reader.pre], sources=[trust(url)],
-                        reger=baser, observations=observations, maximumAge=30)
+                        reger=baser, observations=observations)
         independent = EvidenceContext(consumer)
         try:
             assert not first.observe(url, raw)['rejected']
@@ -199,7 +197,7 @@ def test_public_bup_opening_survives_observer_requery_and_store_reopen(tmp_path)
         baser.reopen()
         observations.reopen()
         second = Context(receiver, readers=[reader.pre], sources=[trust(url)],
-                         reger=baser, observations=observations, maximumAge=30)
+                         reger=baser, observations=observations)
         try:
             response = testing.TestClient(second.app).simulate_post(
                 '/', headers={'Content-Type': CESR_CONTENT_TYPE},
@@ -262,7 +260,7 @@ def test_real_https_source_records_exact_url_observation():
         server = tlsServer(raw, requests=requests)
         url = f'https://127.0.0.1:{server.servant.ha[1]}/'
         source = SourceTrust.fromConfig(trust(url, certedhost='localhost'))
-        ctx = Context(receiver, readers=[requester.pre], sources=[source], maximumAge=3)
+        ctx = Context(receiver, readers=[requester.pre], sources=[source])
         puller = RegistrarPuller(requester, ctx, [source], interval=10, timeout=1)
         try:
             doing.Doist(real=True, tock=0.01, limit=0.7).do(
@@ -384,8 +382,8 @@ def test_failed_source_request_does_not_stop_later_source(monkeypatch, failure):
             ctx.close()
 
 
-def test_source_rotation_requires_a_new_completed_observation(tmp_path):
-    """Persist old evidence while refusing to treat an old source as current."""
+def test_source_rotation_preserves_verified_registry_evidence(tmp_path):
+    """Source configuration changes do not invalidate independently verified registry evidence."""
     oldUrl = 'https://registrar-old.example/evidence'
     newUrl = 'https://registrar-new.example/evidence'
     with openHby(name='rotation-source', version=Vrsn_2_0) as issuer, \
@@ -425,10 +423,10 @@ def test_source_rotation_requires_a_new_completed_observation(tmp_path):
 
             assert second.store.headEvent(rip.said).said == upd.said
             assert second.observations.observations.get((oldUrl,)) == old
-            assert request().status_code == 503
+            assert request().status_code == 200
             assert not second.observe(oldUrl, raw)['rejected']
             assert second.observations.observations.get((oldUrl,)) == old
-            assert request().status_code == 503
+            assert request().status_code == 200
             assert not second.observe(newUrl, raw)['rejected']
             assert request().status_code == 200
         finally:
@@ -461,7 +459,7 @@ def test_pending_evidence_reopens_without_claiming_freshness(tmp_path, accepted_
                 ks=Keeper(**kwa), db=Baser(**kwa), cf=Configer(**kwa))
             reader = receiver.habByName('reader') or receiver.makeHab(name='reader')
             ctx = Context(receiver, readers=[reader.pre], sources=[trust(url), trust(otherUrl)],
-                reger=RegBaser(**kwa), observations=ObservationBaser(**kwa), maximumAge=30)
+                reger=RegBaser(**kwa), observations=ObservationBaser(**kwa))
             assert all(Path(owner.path).is_relative_to(tmp_path)
                        for owner in (receiver.ks, receiver.db, receiver.cf, ctx.reger, ctx.observations))
             return receiver, reader, ctx
@@ -502,7 +500,7 @@ def test_pending_evidence_reopens_without_claiming_freshness(tmp_path, accepted_
             assert not second.ingest(controller.replay(gvrsn=Vrsn_2_0))['rejected']
             assert second.store.headEvent(rip.said).said == successor.said
             assert second.observations.observations.get((url,)) == prior
-            assert request(second, reader, rip.said).status_code == 503
+            assert request(second, reader, rip.said).status_code == 200
             assert not second.observe(url, raw)['rejected']  # stale prefix cannot renew
             assert second.observations.observations.get((url,)) == prior
             assert not second.observe(url, complete)['pending']
@@ -539,11 +537,9 @@ def test_pending_evidence_reopens_without_claiming_freshness(tmp_path, accepted_
 
 @pytest.mark.parametrize('value', [0, -1, float('nan'), float('inf')])
 def test_observation_durations_must_be_finite_and_positive(value):
-    """Reject invalid freshness and polling limits before scheduling work."""
+    """Reject invalid polling limits before scheduling work."""
     with openHby(name='duration-observer', version=Vrsn_2_0) as hby:
         hab = hby.makeHab(name='observer')
-        with pytest.raises(ValueError):
-            Context(hby, maximumAge=value)
         ctx = Context(hby)
         try:
             with pytest.raises(ValueError):

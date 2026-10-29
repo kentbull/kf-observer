@@ -1,6 +1,6 @@
 """Full-evidence observation persistence and authenticated source polling.
 
-This application owns its source-authority and freshness policy.  KERIpy still
+This application owns configured-source acquisition.  KERIpy still
 owns the shared evidence processors and durable registry stores.
 """
 from collections import deque
@@ -155,13 +155,10 @@ def sourceTrusts(registrars, *, cafilepath=None, certedhosts=()):
 
 
 class ObservedEvidence(EvidenceContext):
-    """Share KERIpy verification while owning exact-source freshness policy."""
-    def __init__(self, hby, *, observations=None, maximumAge=15.0,
+    """Share KERIpy verification and record configured-source observations."""
+    def __init__(self, hby, *, observations=None,
                  sources=(), **kwa):
-        if not isfinite(maximumAge) or maximumAge <= 0:
-            raise ValueError('maximum observation age must be finite and positive')
         super().__init__(hby, **kwa)
-        self.maximumAge = maximumAge
         self.sources = tuple(SourceTrust.fromConfig(source) for source in sources)
         self.urls = frozenset(source.url for source in self.sources)
         self.observations = observations if observations is not None else ObservationBaser(
