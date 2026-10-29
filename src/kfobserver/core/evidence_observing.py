@@ -155,7 +155,11 @@ def sourceTrusts(registrars, *, cafilepath=None, certedhosts=()):
 
 
 class ObservedEvidence(EvidenceContext):
-    """Share KERIpy verification and record configured-source observations."""
+    """Own service stores and share KERIpy verification for source observations.
+
+    Registry and observation stores supplied to this application context transfer
+    lifecycle ownership to it; the supplied Habery remains caller-owned.
+    """
     def __init__(self, hby, *, observations=None,
                  sources=(), **kwa):
         super().__init__(hby, **kwa)
@@ -188,8 +192,9 @@ class ObservedEvidence(EvidenceContext):
         return result
 
     def close(self):
+        """Release service stores after cancellation, leaving Habery open."""
         self.observations.close()
-        super().close()
+        self.reger.close()
 
 
 class SourceClientDoer(http.clienting.ClientDoer):
