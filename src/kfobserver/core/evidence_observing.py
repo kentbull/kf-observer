@@ -162,6 +162,12 @@ class ObservedEvidence(EvidenceContext):
     """
     def __init__(self, hby, *, observations=None,
                  sources=(), **kwa):
+        """Borrow hby and configure source identities with an owned observation store.
+
+        observations supplies the store to close with this context, or None opens one.
+        sources supplies explicit trust configuration; kwa configures shared evidence
+        processors. Construction does not fetch remote evidence.
+        """
         super().__init__(hby, **kwa)
         self.sources = tuple(SourceTrust.fromConfig(source) for source in sources)
         self.urls = frozenset(source.url for source in self.sources)
@@ -200,10 +206,16 @@ class ObservedEvidence(EvidenceContext):
 class SourceClientDoer(http.clienting.ClientDoer):
     """Contain socket and TLS failures for one source acquisition."""
     def __init__(self, client, **kwa):
+        """Wrap client with ordinary HIO options kwa and start without a captured error."""
         super().__init__(client, **kwa)
         self.error = None
 
     def recur(self, tyme):
+        """Service the client at scheduler time tyme; return True on expected failure.
+
+        Retain socket/TLS or decoder errors for the pull owner to inspect rather than
+        raising them through the sibling service scheduler.
+        """
         try:
             return super().recur(tyme)
         except (OSError, ValueError) as error:
@@ -215,6 +227,12 @@ class RegistrarPuller(doing.DoDoer):
     """Poll authenticated configured sources sequentially on a fixed cadence."""
     def __init__(self, hab, observer, sources, *, interval=5.0,
                  timeout=5.0, tock=0.03125):
+        """Configure signed source acquisition for hab and observer's evidence cache.
+
+        sources selects explicit trusted endpoints; interval controls polling, timeout
+        bounds each request and tock controls HIO scheduling. Invalid timing raises
+        ValueError. This owner schedules acquisition, not a new evidence acceptor.
+        """
         if not isfinite(interval) or not isfinite(timeout) or interval <= 0 or timeout <= 0:
             raise ValueError('poll interval and timeout must be finite and positive')
         self.hab, self.observer = hab, observer

@@ -61,9 +61,16 @@ def authenticate(req, ctx, allowed, routes):
 class QueryEnd:
     """Serve accepted local registry history after ordinary query authentication."""
     def __init__(self, ctx):
+        """Borrow ctx for reader policy and its already verified local registry cache."""
         self.ctx = ctx
 
     def on_post(self, req, rep):
+        """Authenticate Falcon req and write cached, accepted evidence to rep.
+
+        Only configured readers may query tels/tels/head. Invalid scope is rejected;
+        missing history or pending dependencies yield HTTP errors. A read never pulls
+        from an upstream source or claims new observation freshness.
+        """
         _, qry = authenticate(req, self.ctx, self.ctx.readers,
                               ('tels', 'tels/head'))
         regk = qry.get('i')

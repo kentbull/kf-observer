@@ -21,6 +21,7 @@ from kfobserver.core.evidence_querying import QueryEnd
 class HealthEnd:
     """Report listener availability without making an evidence claim."""
     def on_get(self, req, rep):
+        """Set the Falcon response media to local listener health; req is unused."""
         rep.media = {'status': 'ok'}
 
 

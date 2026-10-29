@@ -62,6 +62,12 @@ class _KELReplayParser(Parser):
             raise
 
     def msgProcess(self, exts, kvy, tvy, exc, rvy, vry, rgy=None, scy=None):
+        """Dispatch exts through the supplied ordinary protocol processors.
+
+        Skip exact accepted KEL duplicates. Retain and re-raise other errors so the
+        replay owner can distinguish verified history from failed intake; rgy/scy
+        remain optional registry/section collaborators of the inherited parser.
+        """
         try:
             serder = exts["serder"]
             if serder.said in kvy.db.kels.get(keys=serder.pre, on=serder.sn):
