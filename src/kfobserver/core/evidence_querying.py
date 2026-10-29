@@ -1,19 +1,76 @@
 """Authenticated cache-only query policy for the full-evidence profile."""
 import falcon
+from keri import Vrsn_2_0
+from keri.core import Parser
 
-from keri.app.evidence_httping import authenticate
 from keri.app.httping import CESR_CONTENT_TYPE
-from keri.help import helping
 from keri.kering import ValidationError
+
+
+# Service HTTP policy moved from KERIpy aea8fbc6 evidence_httping.py.
+# KRAM remains the protocol authority; no cross-service adapter package is needed.
+def authenticate(req, ctx, allowed, routes):
+    """Authenticate one complete KERI v2 signed query and enforce the service allowlist.
+
+        Args:
+            req: Falcon request carrying one signed CESR query in its bounded body.
+            ctx (Context): Service holding enabled KRAM and authenticated KEL evidence.
+            allowed (Collection[str]): Explicit requester AIDs permitted for this route.
+            routes (Collection[str]): Query routes this endpoint accepts.
+
+        Returns:
+            tuple: Authenticated query Serder and its query-attribute map.
+
+        Raises:
+            falcon.HTTPError: Unsupported media, malformed/multiple messages, forbidden
+                AID/route, unavailable authentication, or invalid/replayed evidence.
+
+        Authorization alone cannot authenticate input. KRAM verifies the exact request
+        and updates replay/liveness state before endpoint code consumes its payload."""
+    if (req.content_type or '').split(';')[0].lower() != CESR_CONTENT_TYPE:
+        raise falcon.HTTPUnsupportedMediaType()
+    ims = bytearray(req.bounded_stream.read())
+    if not ims:
+        raise falcon.HTTPBadRequest(description='empty query')
+    try:
+        dom = Parser(version=Vrsn_2_0).parseOne(ims=ims, processive=False, local=False)
+        if dom is None or dom.serder is None or ims:
+            raise ValueError('expected exactly one complete signed query')
+        serder = dom.serder
+        if serder.ilk != 'qry' or serder.pvrsn != Vrsn_2_0:
+            raise ValueError('expected a KERI v2 signed query')
+    except Exception as ex:
+        raise falcon.HTTPBadRequest(description=str(ex)) from ex
+    if serder.route not in routes or serder.pre not in allowed:
+        raise falcon.HTTPForbidden(description='requester or route is not authorized')
+    if not ctx.kvy.kramer or not ctx.kvy.kramer.enabled:
+        raise falcon.HTTPServiceUnavailable(description='request authentication unavailable')
+    try:
+        kwa = {key: getattr(dom, key) for key in ('sigers', 'cigars', 'lsgs', 'tsgs', 'sscs', 'ssts')}
+        if ctx.kvy.kramer.intake(serder, kwa) is None:
+            raise ValueError('KRAM rejected request')
+    except Exception as ex:
+        raise falcon.HTTPUnauthorized(description=str(ex)) from ex
+    qry = serder.sad.get('q')
+    if not isinstance(qry, dict):
+        raise falcon.HTTPBadRequest(description='query must be an object')
+    return serder, qry
 
 
 
 class QueryEnd:
-    """Serve verified history only with an exact current-source observation."""
+    """Serve accepted local registry history after ordinary query authentication."""
     def __init__(self, ctx):
+        """Borrow ctx for reader policy and its already verified local registry cache."""
         self.ctx = ctx
 
     def on_post(self, req, rep):
+        """Authenticate Falcon req and write cached, accepted evidence to rep.
+
+        Only configured readers may query tels/tels/head. Invalid scope is rejected;
+        missing history or pending dependencies yield HTTP errors. A read never pulls
+        from an upstream source or claims new observation freshness.
+        """
         _, qry = authenticate(req, self.ctx, self.ctx.readers,
                               ('tels', 'tels/head'))
         regk = qry.get('i')
@@ -29,23 +86,9 @@ class QueryEnd:
         if not isinstance(sn, int) or sn < 0:
             raise falcon.HTTPBadRequest(
                 description='sn must be a nonnegative integer')
-        observations = [record for url in self.ctx.urls
-                        if (record := self.ctx.observations.observations.get((url,)))
-                        and record.heads.get(regk) == self.ctx.store.head(regk).qb64]
-        if not observations:
-            raise falcon.HTTPServiceUnavailable(
-                description='no completed observation for accepted head')
-        completed = max(record.completed for record in observations)
-        age = (helping.nowUTC() - helping.fromIso8601(completed)).total_seconds()
-        if age < 0 or age > self.ctx.maximumAge:
-            raise falcon.HTTPServiceUnavailable(
-                description='cached observation is stale')
         try:
             rep.data = self.ctx.clone([regk], sn=sn)
         except ValidationError as ex:
             raise falcon.HTTPServiceUnavailable(
                 description='registry history is outside the supported evidence profile') from ex
         rep.content_type = CESR_CONTENT_TYPE
-        rep.set_header('Observer-Observed-At', completed)
-        rep.set_header('Observer-Evidence-State', 'fresh')
-        rep.set_header('Observer-Registry-Head', self.ctx.store.head(regk).qb64)

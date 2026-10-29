@@ -128,8 +128,6 @@ parser.add_argument("--full-evidence", action="store_true",
                     help="Use independent complete-proof polling and cache-only queries.")
 parser.add_argument("--reader", action="append", default=[], help="Authorized reader AID.")
 parser.add_argument("--kel", action="append", default=[], help="Signed KEL bootstrap path.")
-parser.add_argument("--maximum-age", type=float, default=15.0,
-                    help="Maximum completed-source observation age in seconds.")
 parser.add_argument("--timeout", type=float, default=5.0,
                     help="Per-source cooperative HTTP deadline in seconds.")
 parser.add_argument(
@@ -228,7 +226,7 @@ def runObserver(args, expire=0.0):
                 raise ConfigurationError("full-evidence profile obtains witness evidence from registrar streams")
             ctx, workers = evidence.setup(hby, alias=args.alias, host=args.host,
                 port=int(args.http), registrars=args.registrars, readers=args.reader,
-                kel=args.kel, maximumAge=args.maximum_age, interval=args.poll,
+                kel=args.kel, interval=args.poll,
                 timeout=args.timeout, registrarCafilepath=args.registrarCa,
                 registrarCertedhosts=args.registrarCertedhosts,
                 keypath=args.keypath, certpath=args.certpath,
