@@ -1,10 +1,11 @@
 """Full-evidence observation persistence and authenticated source polling.
 
-This application owns its source-authority and freshness policy.  KERIpy still
+This application owns configured-source acquisition.  KERIpy still
 owns the shared evidence processors and durable registry stores.
 """
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+import logging
 import ipaddress
 from math import isfinite
 from pathlib import Path
@@ -12,7 +13,17 @@ from urllib.parse import urlsplit
 
 from hio.base import doing
 from hio.core import http
-from keri.app.evidencing import EvidenceContext, signedQuery
+from keri import Vrsn_2_0
+from keri.acdc import Regery
+from keri.core import (BlindState, Blinder, BoundState, Codens, Counter,
+                       Kevery, Number, NumDex, Parser, SerderACDC, query)
+from keri.core.kraming import Pruner
+from keri.db.dbing import snKey
+from keri.db.subing import Suber
+from keri.kering import (ConfigurationError, KeriError, ValidationError, MissingSignatureError,
+    MissingWitnessSignatureError, MissingDelegationError, OutOfOrderError,
+    MissingDelegableApprovalError, UnverifiedReceiptError,
+    UnverifiedWitnessReceiptError, UnverifiedTransferableReceiptError)
 from keri.app.httping import CESR_CONTENT_TYPE
 from keri.db import dbing, koming
 from keri.help import helping
@@ -154,27 +165,259 @@ def sourceTrusts(registrars, *, cafilepath=None, certedhosts=()):
     return tuple(sources)
 
 
-class ObservedEvidence(EvidenceContext):
-    """Share KERIpy verification while owning exact-source freshness policy."""
-    def __init__(self, hby, *, observations=None, maximumAge=15.0,
-                 sources=(), **kwa):
-        if not isfinite(maximumAge) or maximumAge <= 0:
-            raise ValueError('maximum observation age must be finite and positive')
-        super().__init__(hby, **kwa)
-        self.maximumAge = maximumAge
+logger = logging.getLogger(__name__)
+
+
+class _RequestConfig:
+    """Provide this service's mandatory KRAM configuration to the core owner."""
+    def __init__(self, data):
+        self.data = data
+
+    def get(self):
+        return self.data
+
+
+def signedQuery(hab, route, attributes=None):
+    """Sign one source query with the observer's real habitat keys."""
+    serder = query(pre=hab.pre, route=route, query=attributes or {},
+                   stamp=helping.nowIso8601(), version=Vrsn_2_0)
+    return bytes(hab.endorse(serder, last=True, framed=False, gvrsn=Vrsn_2_0))
+
+
+class ObservedEvidence(doing.DoDoer):
+    """Own native verification, source acquisition telemetry and public proofs."""
+    def __init__(self, hby, *, baser=None, observations=None, sources=(), config=None):
         self.sources = tuple(SourceTrust.fromConfig(source) for source in sources)
         self.urls = frozenset(source.url for source in self.sources)
+        self.hby = hby
+        default = {"kram": {"enabled": True, "denials": [],
+                   "caches": {"~": [1000, 5000, 60000, 300000, 5000, 60000, 300000]}}}
+        self.cf = _RequestConfig(config if config is not None else default)
+        policy = self.cf.get().get("kram", {})
+        if policy.get("enabled") is not True or policy.get("denials"):
+            raise ConfigurationError("service requests require enabled KRAM without denial exemptions")
+        self.kvy = Kevery(db=hby.db, cf=self.cf, enableKram=True, lax=False, local=False)
+        self.rgy = Regery(hby, baser=baser, name=hby.name, base=hby.base, temp=hby.temp)
+        self.store = self.rgy.store
+        self.pendingOpenings = Suber(db=self.rgy.baser, subkey="observer.pending-openings.")
+        self.parser = Parser(kvy=self.kvy, rgy=self.rgy, local=False, version=Vrsn_2_0)
+        self.pruner = Pruner(self.kvy.kramer, tock=1.0)
         self.observations = observations if observations is not None else ObservationBaser(
             name=hby.name, base=hby.base, temp=hby.temp)
+        super().__init__(doers=[self.pruner, doing.doify(self.escrowDo)])
+
+    def escrowDo(self, tymth=None, tock=0.0, **kwa):
+        """Retry remote evidence using the scheduler's clock.
+
+        Parameters:
+            tymth: injected HIO clock; tock: cooperative retry interval.
+            **kwa: unused scheduler metadata.
+        Yields:
+            float: delay before the next bounded escrow pass.
+        """
+        self.wind(tymth)
+        yield tock
+        while True:
+            self.kvy.processEscrows()
+            self.rgy.processEscrows()
+            self._reconcileOpenings()
+            yield tock
+
+
+    def ingest(self, raw, *, publish=False):
+        """Process public KEL/TEL evidence using the observer's concrete owners.
+
+        Only an authorized publisher opts into retaining disclosed openings.
+        Acceptance and dependency persistence belong to Kevery and Regery;
+        this method reports their final outcomes without another pending queue.
+        """
+        ims = bytearray(raw)
+        summary = dict(accepted={}, pending={}, rejected={}, heads={})
+        events, dependencies, disclosures = [], [], []
+        while ims:
+            serder = None
+            try:
+                before = len(ims)
+                dom = self.parser.parseOneBare(ims=ims, processive=False, local=False)
+                if dom is None or dom.serder is None or len(ims) >= before:
+                    raise ValidationError("invalid or incomplete evidence frame")
+                serder = dom.serder
+                if isinstance(serder, SerderACDC):
+                    opening = self._disclosedOpening(serder, dom)
+                    self.rgy.processEvent(serder, sscs=dom.sscs, ssts=dom.ssts)
+                    events.append(serder)
+                    if publish and opening is not None:
+                        disclosures.append((serder, opening))
+                else:
+                    if serder.ilk not in ("icp", "dip", "rot", "drt", "ixn", "rct"):
+                        raise ValidationError("observer intake accepts only public KEL and native TEL")
+                    self.parser.msgProcess(asdict(dom), kvy=self.kvy, tvy=None,
+                                           exc=None, rvy=None, vry=None)
+            except (MissingSignatureError, MissingWitnessSignatureError,
+                    MissingDelegationError, OutOfOrderError,
+                    MissingDelegableApprovalError, UnverifiedReceiptError,
+                    UnverifiedWitnessReceiptError,
+                    UnverifiedTransferableReceiptError) as ex:
+                if serder is not None and not isinstance(serder, SerderACDC) and self._kelPending(serder):
+                    dependencies.append(serder)
+                    continue
+                summary["rejected"]["stream"] = str(ex)
+                break
+            except Exception as ex:
+                summary["rejected"]["stream"] = str(ex)
+                break
+        self.kvy.processEscrows()
+        self.rgy.processEscrows()
+        for event in dependencies:
+            if self._kelPending(event):
+                key = f"kel:{event.pre}"
+                summary["pending"][key] = summary["pending"].get(key, 0) + 1
+            elif self.hby.db.kels.getLast(keys=event.pre, on=event.sn) != event.said:
+                summary["rejected"][f"kel:{event.pre}:{event.snh}"] = "dependency was not accepted or retained"
+        for event in events:
+            regk = event.said if event.ilk == "rip" else event.sad["rd"]
+            sn = Number(numh=event.sad["n"]).num
+            accepted = self.store.seqSaider(regk, sn)
+            if accepted is not None and accepted.qb64 == event.said:
+                bucket = "accepted"
+                previous = summary["heads"].get(regk)
+                if previous is None or Number(numh=self.store.event(previous).sad["n"]).num < sn:
+                    summary["heads"][regk] = event.said
+            else:
+                pending = self._telPending(event)
+                bucket = "pending" if pending else "rejected"
+            summary[bucket][regk] = summary[bucket].get(regk, 0) + 1
+        for event, opening in disclosures:
+            accepted = self.store.seqSaider(event.sad["rd"], Number(numh=event.sad["n"]).num)
+            if accepted is not None and accepted.qb64 == event.said:
+                self.store.putOpening(event.said, opening)
+            elif self._telPending(event):
+                existing = self.pendingOpenings.get(event.said)
+                if existing is not None and existing != opening.qb64:
+                    raise ValidationError("pending public opening is immutable")
+                self.pendingOpenings.put(event.said, opening.qb64)
+        self._reconcileOpenings()
+        return summary
+
+
+    def _disclosedOpening(self, event, dom):
+        """Validate an explicitly supplied opening before native TEL processing."""
+        from keri.acdc.regeventing import vetBlind
+        supplied = [(BlindState, values) for values in dom.bsqs]
+        supplied.extend((BoundState, values) for values in dom.bsss)
+        if not supplied:
+            return None
+        if event.ilk != "bup" or len(supplied) != 1:
+            raise ValidationError("only a BUP may carry one disclosed opening")
+        clan, values = supplied[0]
+        opening = Blinder(data=clan(*values))
+        vetBlind(opening, blid=event.sad["b"])
+        return opening
+
+
+    def _telPending(self, event):
+        """Match the exact BUP/RIP in the core's ordinary dependency escrow."""
+        regk = event.said if event.ilk == "rip" else event.sad["rd"]
+        sn = Number(numh=event.sad["n"]).num
+        return any((event.said,) in escrow.get(keys=regk, on=sn)
+                   for escrow in (self.rgy.baser.maes, self.rgy.baser.ooes))
+
+
+    def _reconcileOpenings(self):
+        """Promote authorized disclosures only after accepted TEL membership.
+
+        Keep exact core dependencies across restart, without a second body
+        queue or retry service. Removed/rejected dependencies lose their proof.
+        """
+        from keri.acdc.regeventing import vetBlind
+        for (said,), raw in list(self.pendingOpenings.getTopItemIter()):
+            event = self.store.event(said)
+            try:
+                if event is None or event.ilk != "bup":
+                    raise ValidationError("pending public opening has no BUP")
+                vetBlind(raw, blid=event.sad["b"])
+                accepted = self.store.seqSaider(event.sad["rd"], Number(numh=event.sad["n"]).num)
+                if accepted is not None and accepted.qb64 == said:
+                    for clan in (BlindState, BoundState):
+                        try:
+                            opening = Blinder(clan=clan, qb64=raw)
+                        except (KeriError, ValueError, TypeError):
+                            continue
+                        if opening.qb64 == raw:
+                            self.store.putOpening(said, opening)
+                            break
+                    else:
+                        raise ValidationError("invalid pending public opening")
+                elif self._telPending(event):
+                    continue
+            except (KeriError, ValueError, TypeError):
+                logger.warning("Discarding invalid pending public opening %s", said)
+            self.pendingOpenings.rem(said)
+
+
+    def _kelPending(self, event):
+        """Report only exact dependencies retained by the ordinary KEL escrows."""
+        db = self.hby.db
+        if event.ilk != "rct":
+            if any(event.said in escrow.get(keys=event.pre, on=event.sn)
+                   for escrow in (db.pses, db.pwes, db.pdes, db.ooes)):
+                return True
+            return event.said in db.delegables.get(keys=snKey(event.pre, event.sn))
+        if any(said == event.said for said, _ in db.uwes.get(keys=event.pre, on=event.sn)):
+            return True
+        receipts = db.ures.get(keys=(event.pre, Number(num=event.sn, code=NumDex.Huge).qb64))
+        receipts += db.vres.get(keys=snKey(event.pre, event.sn))
+        return any(receipt[0].qb64 == event.said for receipt in receipts)
+
+
+    def clone(self, regks=None, sn=0):
+        """Export accepted KEL/TEL and openings explicitly disclosed here.
+
+        Core TEL cloning remains body-only. This service attaches held material
+        from explicit configured-source acquisition only.
+        """
+        kel, tel, issuers = bytearray(), bytearray(), set()
+        for regk in self.registries() if regks is None else regks:
+            rip = self.store.seqEvent(regk, 0)
+            if rip is None:
+                raise KeyError(regk)
+            issuer = rip.sad["i"]
+            if issuer not in issuers:
+                kel.extend(b"".join(self.hby.db.cloneDelegation(self.hby.kevers[issuer], gvrsn=Vrsn_2_0)))
+                kel.extend(b"".join(self.hby.db.clonePreIter(pre=issuer, gvrsn=Vrsn_2_0)))
+                issuers.add(issuer)
+            for raw in self.store.cloneTelIter(regk, sn=sn):
+                event = SerderACDC(raw=raw)
+                opening = self.store.opening(event.said) if event.ilk == "bup" else None
+                attachments = Blinder.enclose([opening]) if opening is not None else b""
+                tel.extend(event.raw)
+                tel.extend(Counter.enclose(qb64=attachments, code=Codens.AttachmentGroup,
+                                          version=Vrsn_2_0))
+        return bytes(kel + tel)
+
+
+    def registries(self):
+        """Enumerate accepted registry heads, excluding staged bodies."""
+        return sorted(keys[0] for keys, _ in self.rgy.baser.heads.getTopItemIter())
+
+    def pendingInScope(self, regks):
+        """Find unresolved ordinals in this scope, ignoring already accepted slots."""
+        scope = set(regks)
+        return any(keys[0] in scope and self.store.seqSaider(keys[0], sn) is None
+                   for escrow in (self.rgy.baser.maes, self.rgy.baser.ooes)
+                   for keys, sn, _ in escrow.getTopItemIter())
 
     def observe(self, url, raw):
-        """Record freshness only after a complete configured-source pull."""
-        result = self.ingest(raw)
-        pending = any(self.store.seqSaider(keys[0], sn) is None
-                      for escrow in (self.reger.maes, self.reger.ooes)
-                      for keys, sn, _ in escrow.getTopItemIter())
+        """Retain disclosed public proof only for configured-source acquisition.
+
+        Completion records describe the source pull, never credential authority
+        or a freshness prerequisite for serving independently accepted history.
+        """
+        result = self.ingest(raw, publish=url in self.urls)
         previous = self.observations.observations.get((url,))
         heads = result['heads']
+        scope = set(heads) | (set(previous.heads) if previous else set())
+        pending = self.pendingInScope(scope)
         complete = not previous or set(previous.heads).issubset(heads)
         complete = complete and all(self.store.head(regk).qb64 == said
                                     for regk, said in heads.items())
@@ -185,17 +428,26 @@ class ObservedEvidence(EvidenceContext):
         return result
 
     def close(self):
-        self.observations.close()
-        super().close()
+        """Release owned source and registry stores after worker cancellation."""
+        if self.observations.opened:
+            self.observations.close()
+        if self.store.opened:
+            self.rgy.close()
 
 
 class SourceClientDoer(http.clienting.ClientDoer):
     """Contain socket and TLS failures for one source acquisition."""
     def __init__(self, client, **kwa):
+        """Wrap client with ordinary HIO options kwa and start without a captured error."""
         super().__init__(client, **kwa)
         self.error = None
 
     def recur(self, tyme):
+        """Service the client at scheduler time tyme; return True on expected failure.
+
+        Retain socket/TLS or decoder errors for the pull owner to inspect rather than
+        raising them through the sibling service scheduler.
+        """
         try:
             return super().recur(tyme)
         except (OSError, ValueError) as error:
@@ -207,6 +459,12 @@ class RegistrarPuller(doing.DoDoer):
     """Poll authenticated configured sources sequentially on a fixed cadence."""
     def __init__(self, hab, observer, sources, *, interval=5.0,
                  timeout=5.0, tock=0.03125):
+        """Configure signed source acquisition for hab and observer's evidence cache.
+
+        sources selects explicit trusted endpoints; interval controls polling, timeout
+        bounds each request and tock controls HIO scheduling. Invalid timing raises
+        ValueError. This owner schedules acquisition, not a new evidence acceptor.
+        """
         if not isfinite(interval) or not isfinite(timeout) or interval <= 0 or timeout <= 0:
             raise ValueError('poll interval and timeout must be finite and positive')
         self.hab, self.observer = hab, observer

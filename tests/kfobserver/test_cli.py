@@ -37,7 +37,7 @@ def test_installed_cli_runs_its_own_http_service(tmp_path):
             "--registrar", "https://127.0.0.1:1/",
             "--registrar-ca", str(SERVER_TLS),
             "--registrar-certedhost", "127.0.0.1=localhost",
-            "--timeout", "0.1", "--full-evidence", "--no-prompt"],
+            "--timeout", "0.1", "--no-prompt"],
             env=env, stdout=output, stderr=subprocess.STDOUT)
         try:
             deadline = time.monotonic() + 15

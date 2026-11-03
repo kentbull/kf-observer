@@ -1,9 +1,8 @@
-"""Full-evidence observer profile over the shared KERIpy evidence core.
+"""Full-evidence observer profile over ordinary KERIpy processors.
 
 This package owns service configuration, role policy and process lifecycle.
 KERIpy owns evidence verification and stores.  This application owns source
-acquisition, observations, query policy, and process lifecycle.  The original
-bare-TEL adapter remains separately selectable.
+acquisition, observations, query policy, and process lifecycle.
 """
 from pathlib import Path
 
@@ -21,6 +20,7 @@ from kfobserver.core.evidence_querying import QueryEnd
 class HealthEnd:
     """Report listener availability without making an evidence claim."""
     def on_get(self, req, rep):
+        """Set the Falcon response media to local listener health; req is unused."""
         rep.media = {'status': 'ok'}
 
 
@@ -33,7 +33,7 @@ class Context(ObservedEvidence):
         Parameters:
             hby: caller-owned habitat environment.
             readers: AIDs explicitly authorized for ACDC v2 registry cache queries.
-            **kwa: shared stores, source trust, freshness age and KRAM settings.
+            **kwa: shared stores, source trust and KRAM settings.
         """
         super().__init__(hby, **kwa)
         self.readers = set(readers)
@@ -43,7 +43,7 @@ class Context(ObservedEvidence):
 
 
 def setup(hby, *, alias="observer", host="127.0.0.1", port=6633,
-          registrars=(), readers=(), kel=(), maximumAge=15.0, interval=5.0,
+          registrars=(), readers=(), kel=(), interval=5.0,
           timeout=5.0, registrarCafilepath=None, registrarCertedhosts=(),
           keypath=None, certpath=None, cafilepath=None):
     """Construct the external observer runtime and verify bootstrap before bind.
@@ -54,14 +54,13 @@ def setup(hby, *, alias="observer", host="127.0.0.1", port=6633,
         registrarCafilepath: explicit outbound source CA bundle for URL entries.
         registrarCertedhosts: required IP=certificate-hostname mappings for IP URLs.
         readers: authorized cache requester AIDs; kel: signed bootstrap paths.
-        maximumAge: positive finite source-observation age in seconds.
         interval, timeout: cooperative polling cadence and per-source deadline.
         keypath, certpath, cafilepath: optional HTTP TLS configuration paths.
     Returns:
         tuple: context and doers. Cancel workers before closing the context.
     Raises:
         ConfigurationError: no source/readers or incomplete bootstrap.
-        ValueError: invalid freshness/poll timing policy.
+        ValueError: invalid poll timing policy.
 
     A presentation query never starts or accelerates a registrar pull. Witness
     receipts and delegation evidence arrive in the full source stream and are
@@ -74,7 +73,7 @@ def setup(hby, *, alias="observer", host="127.0.0.1", port=6633,
     hab = hby.habByName(name=alias)
     if hab is None:
         hab = hby.makeHab(name=alias, transferable=True)
-    ctx = Context(hby, readers=readers, sources=sources, maximumAge=maximumAge)
+    ctx = Context(hby, readers=readers, sources=sources)
     server = None
     try:
         for path in kel:
@@ -84,7 +83,7 @@ def setup(hby, *, alias="observer", host="127.0.0.1", port=6633,
         poller = RegistrarPuller(hab, ctx, sources, interval=interval, timeout=timeout)
         server = createHttpServer(host=host, port=port, app=ctx.app,
             keypath=keypath, certpath=certpath, cafilepath=cafilepath)
-        return ctx, [BaserDoer(baser=ctx.reger), BaserDoer(baser=ctx.observations),
+        return ctx, [BaserDoer(baser=ctx.rgy.baser), BaserDoer(baser=ctx.observations),
                      ctx, http.ServerDoer(server=server), poller]
     except BaseException:
         if server is not None:

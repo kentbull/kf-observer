@@ -1,148 +1,78 @@
 # kf-observer
 
-`kf-observer` is the KERI Foundation observer service: a long-running node that
-consumes **bulk TEL** from a registrar, **verifies every event** against the
-issuer KEL, stores a verified copy, and answers **wallet/verifier** queries for
-one registry’s TEL (last event, all events, or events since `sn`).
+`kf-observer` independently verifies native ACDC registry evidence from configured
+HTTPS registrars and serves an authenticated local cache. Kevery verifies KEL;
+Regery alone accepts RIP/BUP events through ordinary anchor/order checks. The
+service owns HTTP policy, polling, source trust and store lifecycle.
 
-It is the ACDC counterpart of a watcher. Watchers serve KELs; this process
-serves TELs. Wallets and verifiers must not talk to the registrar — they talk
-to an observer (anti-correlation). For SEDI, observers are not optional.
+A reader query never starts or accelerates source acquisition. Unknown registries
+return 404; unresolved dependencies in the requested registry return 503. Accepted
+history remains available independently of source-observation timestamps or source
+configuration changes. KRAM still authenticates requests and enforces its normal
+replay policy. There are no Observer-* freshness acceptance headers or gates.
 
-## Trust boundary
+## HTTP contract
 
-```
-wallet / verifier  -->  kf-observer  -->  kf-registrar (bulk only)
-                         |                 (KEL fallback via witness GET /log)
-```
+| Request | Behavior |
+| --- | --- |
+| `GET /health` | Listener health only. |
+| Signed V2 `qry` `POST /`, route `tels`, `q.i` registry SAID | Accepted KEL support and framed TEL, optionally from integer `q.sn`. |
+| Signed V2 `qry` `POST /`, route `tels/head` | Accepted KEL support and the accepted TEL head. |
+| `PUT /` with public signed KEL replay | Introduce one AID for request authentication. Full-stream framing/type/8 MiB size preflight precedes Kevery processing; no TEL intake through this endpoint. |
 
-- **Ingest:** signed V2 `qry` POST to the registrar (`r: "tels/bulk"` / `"regs"`),
-  KRAM + allow-listed observer AID. Response is concatenated CESR: issuer **KEL**
-  clones (when known on the registrar) followed by accepted `rip`/`bup` events.
-  This node loads KEL into its Baser, runs `regeventing.vet`, and stores only what
-  verifies. Missing anchors escrow until a later poll or witness KEL fetch.
-- **Serve** (default `127.0.0.1:6633`): signed V2 `qry` POST for one registry
-  SAID — last / all / since `sn`. No blinded-attribute disclosure. No
-  “is this ACDC issued?” business logic (that is `vet` on the verifier).
-  Unknown registries trigger an on-demand registrar pull (IPEX timing).
+POST requires an explicitly configured reader AID and actual request-author
+signatures or a valid own-KEL source seal, plus KRAM. Registrar bulk routes and
+credential-SAID status queries are refused. Responses carry independently
+verifiable evidence, not an application credential-standing verdict.
 
-## Query contract (wallet / verifier / IPEX)
+Explicitly public BSQ/BSS openings acquired from configured sources survive
+accepted storage, pending dependency recovery and reopen. The app attaches them
+to accepted HTTP evidence; core TEL clones remain body-only. Pending proofs are
+never served. The public service stores no registry roots.
 
-| Field | Rule |
-|-------|------|
-| Message | Signed V2 `qry` CESR POST to `/` |
-| `r` | `tels` (clone from `sn`) or `tels/head` (head event only) |
-| `q.i` | **Single registry SAID** (`rip.d`, including presentation `a.rd`) |
-| `q.sn` | Optional; inclusive start sequence for `tels` |
-| Forbidden | `tels/bulk`, `regs`, `vcid`, wallet phone-home to the registrar |
+## Install and run
 
-Response body is verified TEL CESR only (no KEL). At point of validation the
-verifier queries **this observer**, never the registrar.
+Python 3.14+ and libsodium are required (`brew install libsodium` on macOS or
+`apt-get install libsodium-dev` on Debian). The project and lockfile select a
+complete published KERIpy commit and require no sibling source checkout.
 
-## Requirements
-
-- Python >= 3.14
-- `libsodium` (required by the `keri` package)
-
-### Installing libsodium
-
-**macOS:**
-
-```bash
-brew install libsodium
-```
-
-**Ubuntu/Debian:**
-
-```bash
-sudo apt-get install libsodium-dev
-```
-
-## Installation
-
-Published dependency is `keri` from WebOfTrust/keripy. In this umbrella
-checkout, `tool.uv.sources` points at the sibling `../keripy` (editable):
-
-```bash
-cd kf-observer
+```sh
 uv sync --all-extras
-```
-
-Or with pip:
-
-```bash
-python3.14 -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip setuptools wheel
-python -m pip install -e '.[dev]'
-```
-
-Standalone clones without the sibling tree will pull `keri` from git.
-
-## Running
-
-```bash
 kf-observer start \
-  --alias observer \
-  --config-dir /path/to/scripts \
-  --config-file kf-observer \
-  --host 127.0.0.1 \
-  --http 6633 \
-  --registrar http://127.0.0.1:6632/ \
-  --witness http://127.0.0.1:5642/#<witness-AID>
-```
-
-`--config-dir` must point at the directory *above* `keri/cf/` (KERI appends
-`keri/cf/` when locating the file). For this repo that is `scripts/`.
-
-Repeat `--registrar` / `--witness` for each peer, or list them in
-`scripts/keri/cf/kf-observer.json` under `kf-observer.registrars` and
-`kf-observer.witnesses` (witness entries may be `"url#aid"` or
-`{"url": "...", "aid": "..."}`).
-
-This node’s AID must be allow-listed on each registrar (`--observer` /
-`kf-registrar.observers`).
-
-Witness `GET /log` is a **fallback** when bulk TEL arrives without a usable
-issuer KEL. Prefer registrar bulk that already includes the KEL (minted TELs
-and admin `POST /ingest`).
-
-### Full-evidence profile
-
-The full-evidence profile polls complete registrar proof streams on a fixed
-cadence and serves only cached evidence whose exact accepted registry head has
-a recent completed source observation. A wallet query never starts or speeds up
-a source poll.
-
-Each outbound registrar source must be HTTPS and have an explicit CA bundle.
-DNS URLs use the URL hostname for certificate verification. An IP URL also
-requires an operator-owned `IP=HOSTNAME` certificate identity mapping. These
-outbound trust settings are separate from `--keypath`, `--certpath`, and
-`--cafilepath`, which configure the observer's listener.
-
-```bash
-kf-observer start \
-  --full-evidence \
   --alias observer \
   --reader '<authorized-reader-AID>' \
   --registrar https://127.0.0.1:6632/ \
   --registrar-ca /absolute/path/to/registrar-ca.pem \
   --registrar-certedhost 127.0.0.1=registrar.example \
-  --maximum-age 15 \
-  --timeout 5
+  --kel /absolute/path/to/reader-kel.cesr \
+  --poll 5 --timeout 5 \
+  --host 127.0.0.1 --http 6633
 ```
 
-Repeat `--registrar` for each source. `--registrar-ca` applies to URL entries
-from the CLI; repeat `--registrar-certedhost` for each distinct IP connector.
-Plain HTTP, missing or relative CA files, unused IP mappings, redirects, and
-certificate identity failures are rejected without recording freshness.
+Repeat `--registrar`, `--reader` and bootstrap `--kel` as needed. Every outbound
+source requires HTTPS and an explicit CA bundle. DNS URLs use the URL hostname;
+an IP URL requires the operator's `IP=HOSTNAME` certificate identity mapping.
+Redirects, plaintext sources, wrong CA/hostname and ambiguous mappings are
+refused. Outbound trust is separate from listener `--keypath`, `--certpath` and
+`--cafilepath`. `--config-dir` names the directory above `keri/cf/`.
 
-## Tests
+One cooperative poller keeps fixed cadence and per-source deadlines; failure at
+one source does not stop later sources. Optional persisted completion/head rows
+are source acquisition telemetry. They never authorize acceptance or make a
+cache query imply publication recency.
 
-```bash
-export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib:/usr/local/lib:/usr/lib"
-export DYLD_LIBRARY_PATH="$(brew --prefix)/lib"
-pytest tests/
+The former bare-TEL/on-demand/witness profile and its selectors are removed.
+The ordinary KERI v1 event-body lane in the core parser is preserved. See the
+[test migration and donor accounting](docs/native-observer-migration.md).
+
+## Checks
+
+```sh
+pytest tests/kfobserver
+ruff check src tests
+uv lock --check
 ```
 
-On Linux, libsodium install is enough; the `DYLD_*` exports are macOS-only.
+LMDB checks on this workspace run with Docker-owned state. Source and installed
+candidate checks are scoped service evidence; full installed network workflows
+and end-to-end qualification are separate.
