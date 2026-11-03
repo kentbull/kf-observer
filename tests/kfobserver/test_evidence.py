@@ -1,5 +1,4 @@
 """Full-evidence service tests using real signed queries and core verification."""
-from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 import ssl
@@ -12,16 +11,19 @@ from hio.core import http, tcp
 from keri import Vrsn_2_0
 from keri.acdc import acdcmap, blindate, regcept
 from keri.acdc.regbasing import RegBaser
-from keri.app.evidencing import EvidenceContext, signedQuery
-from keri.app.habbing import openHby
+from keri.acdc.regeventing import vetBlind, vetBound
+from keri.app.habbing import Habery, openHby
+from keri.app.keeping import Keeper
+from keri.app.configing import Configer
+from keri.db.basing import Baser
 from keri.app.httping import CESR_CONTENT_TYPE
 from keri.core import Blinder, Counter, Codens, Parser, SerderACDC
-from keri.db import dbing, koming
+from keri.kering import Kinds
 from keri.help import helping
 
 from kfobserver.core.evidence import Context
 from kfobserver.core.evidence_observing import (
-    Observation, ObservationBaser, RegistrarPuller, SourceTrust, sourceTrusts)
+    Observation, ObservationBaser, RegistrarPuller, SourceTrust, sourceTrusts, signedQuery)
 
 
 TLS_DIR = Path(__file__).parents[1] / 'tls'
@@ -29,23 +31,6 @@ SERVER_TLS = TLS_DIR / 'server.pem'
 WRONG_TLS = TLS_DIR / 'client.pem'
 
 
-@dataclass
-class OldObservation:
-    """The removed KERIpy adapter's persisted record shape."""
-    completed: str = ''
-    heads: dict = field(default_factory=dict)
-
-
-class OldObservationBaser(dbing.LMDBer):
-    """Write the pre-extraction schema without importing the retired adapter."""
-    TailDirPath = 'keri/observer'
-    AltTailDirPath = '.keri/observer'
-
-    def reopen(self, **kwa):
-        super().reopen(**kwa)
-        self.observations = koming.Komer(
-            db=self, subkey='observations.', klas=OldObservation)
-        return self.opened
 
 
 def trust(url, *, ca=SERVER_TLS, certedhost=None):
@@ -72,14 +57,26 @@ def tlsServer(raw, certificate=SERVER_TLS, requests=None):
     return server
 
 
-def issuedEvidence(hab):
+def boundOpening(hab, credential, state, bound):
+    """Build an exact proof, with a genuine accepted Issuee event for BSS."""
+    if not bound:
+        return Blinder.blind(acdc=credential.said, state=state)
+    event = hab.kever.serder
+    opening = Blinder.blind(acdc=credential.said, state=state, bound=True,
+                            bsn=event.sn, bd=event.said)
+    vetBlind(opening, blid=opening.said)
+    assert vetBound(opening, acdc=credential, db=hab.db).said == event.said
+    return opening
+
+
+def issuedEvidence(hab, bound=False):
     """Create a KEL-anchored registry stream and return its accepted head."""
     rip = regcept(israid=hab.pre)
-    credential = acdcmap(israid=hab.pre, regid=rip.said,
+    credential = acdcmap(israid=hab.pre, regid=rip.said, iseaid=hab.pre if bound else None,
                          attribute={"d": "", "example": True})
-    opening = Blinder.blind(acdc=credential.said, state='issued')
+    opening = boundOpening(hab, credential, 'issued', bound)
     bup = blindate(rip.said, rip.said, opening.said)
-    hab.interact(data=[dict(s=e.sad["n"], d=e.said) for e in (rip, bup)])
+    hab.interact(data=[dict(i=rip.said, s=e.sad["n"], d=e.said) for e in (rip, bup)])
     empty = Counter.enclose(qb64=b'', code=Codens.AttachmentGroup,
                             version=Vrsn_2_0)
     opened = Counter.enclose(qb64=Blinder.enclose([opening]),
@@ -88,14 +85,14 @@ def issuedEvidence(hab):
     return rip, bup, credential, raw
 
 
-def publicEvidence(hab):
+def publicEvidence(hab, bound=False, kind=Kinds.json):
     """Create complete KEL/rip/public-bup evidence with the expanded opening."""
-    rip = regcept(israid=hab.pre)
-    credential = acdcmap(israid=hab.pre, regid=rip.said,
+    rip = regcept(israid=hab.pre, kind=kind)
+    credential = acdcmap(israid=hab.pre, regid=rip.said, iseaid=hab.pre if bound else None,
                          attribute={"d": "", "public": True})
-    opening = Blinder.blind(acdc=credential.said, state='issued')
-    bup = blindate(rip.said, rip.said, opening.said)
-    hab.interact(data=[dict(s=e.sad['n'], d=e.said) for e in (rip, bup)])
+    opening = boundOpening(hab, credential, 'issued', bound)
+    bup = blindate(rip.said, rip.said, opening.said, kind=kind)
+    hab.interact(data=[dict(i=rip.said, s=e.sad['n'], d=e.said) for e in (rip, bup)])
     empty = Counter.enclose(qb64=b'', code=Codens.AttachmentGroup,
                             version=Vrsn_2_0)
     opened = Counter.enclose(qb64=Blinder.enclose([opening]),
@@ -110,7 +107,7 @@ def publicOpening(raw, event):
     parser = Parser(version=Vrsn_2_0)
     found = []
     while remaining:
-        dom = parser.parseOne(ims=remaining, processive=False, local=False)
+        dom = parser.parseOneBare(ims=remaining, processive=False, local=False)
         if isinstance(dom.serder, SerderACDC) and dom.serder.said == event.said:
             found.extend(dom.bsqs)
             found.extend(dom.bsss)
@@ -118,15 +115,15 @@ def publicOpening(raw, event):
     return b''.join(item.qb64b for item in found[0])
 
 
-def test_cache_queries_require_current_source_and_exact_observed_head():
-    """Reject unknown, unobserved, obsolete-source and stale cache answers."""
+def test_cache_queries_serve_accepted_evidence_without_observation_age():
+    """Reject unknown registries and serve accepted evidence independently of acquisition timestamps."""
     with (openHby(name="source", version=Vrsn_2_0) as issuer,
           openHby(name="observer", version=Vrsn_2_0) as receiver):
         controller = issuer.makeHab(name="issuer")
         reader = receiver.makeHab(name="reader")
         rip, bup, credential, raw = issuedEvidence(controller)
         url = "https://independent-source/"
-        ctx = Context(receiver, readers=[reader.pre], sources=[trust(url)], maximumAge=3)
+        ctx = Context(receiver, readers=[reader.pre], sources=[trust(url)])
         try:
             client = testing.TestClient(ctx.app)
 
@@ -138,47 +135,47 @@ def test_cache_queries_require_current_source_and_exact_observed_head():
             assert request().status_code == 404
             assert ctx.registries() == []
             assert not ctx.ingest(raw)["rejected"]
-            assert request().status_code == 503
+            assert request().status_code == 200
             assert not ctx.observe("https://obsolete-source/", raw)["rejected"]
-            assert request().status_code == 503
+            assert request().status_code == 200
             assert not ctx.observe(url, raw)["rejected"]
             response = request()
             assert response.status_code == 200
-            assert response.headers["observer-registry-head"] == bup.said
-            # Historical accepted evidence remains intact, but an expired
-            # receiver observation cannot authorize a fresh cache response.
+            # Local acquisition age does not alter protocol evidence acceptance.
             old = helping.toIso8601(helping.nowUTC() - timedelta(seconds=30))
             ctx.observations.observations.pin((url,), Observation(old, {rip.said: bup.said}))
-            assert request().status_code == 503
+            assert request().status_code == 200
             assert ctx.store.headEvent(rip.said).said == bup.said
             assert not ctx.observe(url, raw)["rejected"]
             opening = Blinder.blind(acdc=credential.said, state='revoked')
             revoked = blindate(rip.said, bup.said, opening.said, sn=2)
-            controller.interact(data=[dict(s=revoked.sad["n"], d=revoked.said)])
+            controller.interact(data=[dict(i=rip.said, s=revoked.sad["n"], d=revoked.said)])
             opened = Counter.enclose(qb64=Blinder.enclose([opening]),
                 code=Codens.AttachmentGroup, version=Vrsn_2_0)
             assert not ctx.ingest(controller.replay(gvrsn=Vrsn_2_0)
                                   + revoked.raw + opened)["rejected"]
-            assert request().status_code == 503  # old observation names the former head
+            assert request().status_code == 200  # ordinary acceptance advances the served head
         finally:
             ctx.close()
 
 
-def test_public_bup_opening_survives_observer_requery_and_store_reopen(tmp_path):
+@pytest.mark.parametrize("bound", [pytest.param(False, id="bsq"), pytest.param(True, id="bss")])
+@pytest.mark.parametrize("kind", [Kinds.json, Kinds.cesr])
+def test_public_bup_opening_survives_observer_requery_and_store_reopen(tmp_path, bound, kind):
     """Serve the exact accepted opening after observation, downstream ingest, and reopen."""
     with (openHby(name='opening-source', version=Vrsn_2_0) as issuer,
           openHby(name='opening-observer', version=Vrsn_2_0) as receiver,
           openHby(name='opening-consumer', version=Vrsn_2_0) as consumer):
         controller = issuer.makeHab(name='issuer')
         reader = receiver.makeHab(name='reader')
-        rip, bup, opening, raw = publicEvidence(controller)
+        rip, bup, opening, raw = publicEvidence(controller, bound=bound, kind=kind)
         url = 'https://registrar.example/evidence'
         baser = RegBaser(name='opening-observer', headDirPath=str(tmp_path), temp=False)
         observations = ObservationBaser(
             name='opening-observer', headDirPath=str(tmp_path), temp=False)
         first = Context(receiver, readers=[reader.pre], sources=[trust(url)],
-                        reger=baser, observations=observations, maximumAge=30)
-        independent = EvidenceContext(consumer)
+                        baser=baser, observations=observations)
+        independent = Context(consumer, sources=[trust("https://observer.example/evidence")])
         try:
             assert not first.observe(url, raw)['rejected']
             response = testing.TestClient(first.app).simulate_post(
@@ -186,9 +183,9 @@ def test_public_bup_opening_survives_observer_requery_and_store_reopen(tmp_path)
                 body=signedQuery(reader, 'tels', {'i': rip.said}))
             assert response.status_code == 200
             assert publicOpening(response.content, bup) == opening.qb64b
-            result = independent.ingest(response.content)
+            result = independent.observe("https://observer.example/evidence", response.content)
             assert not result['pending'] and not result['rejected']
-            assert independent.store.opening(bup.said) == opening.qb64
+            assert independent.store.opening(bup.said).qb64 == opening.qb64
         finally:
             independent.close()
             first.close()
@@ -196,7 +193,7 @@ def test_public_bup_opening_survives_observer_requery_and_store_reopen(tmp_path)
         baser.reopen()
         observations.reopen()
         second = Context(receiver, readers=[reader.pre], sources=[trust(url)],
-                         reger=baser, observations=observations, maximumAge=30)
+                         baser=baser, observations=observations)
         try:
             response = testing.TestClient(second.app).simulate_post(
                 '/', headers={'Content-Type': CESR_CONTENT_TYPE},
@@ -205,24 +202,6 @@ def test_public_bup_opening_survives_observer_requery_and_store_reopen(tmp_path)
             assert publicOpening(response.content, bup) == opening.qb64b
         finally:
             second.close()
-
-
-def test_old_producer_new_consumer_reopens_observation_schema(tmp_path):
-    """Read legacy KERIpy rows through the app-owned unchanged LMDB contract."""
-    url = 'https://registrar.example/evidence'
-    old = OldObservationBaser(name='compat', headDirPath=str(tmp_path), temp=False)
-    old.observations.pin((url,), OldObservation('2026-10-24T00:00:00.000000+00:00',
-                                                {'registry': 'head'}))
-    old.close()
-
-    new = ObservationBaser(name='compat', headDirPath=str(tmp_path), temp=False)
-    try:
-        record = new.observations.get((url,))
-        assert record == Observation('2026-10-24T00:00:00.000000+00:00',
-                                     {'registry': 'head'})
-        assert new.TailDirPath == 'keri/observer'
-    finally:
-        new.close()
 
 
 @pytest.mark.parametrize('config, message', [
@@ -259,15 +238,24 @@ def test_real_https_source_records_exact_url_observation():
         server = tlsServer(raw, requests=requests)
         url = f'https://127.0.0.1:{server.servant.ha[1]}/'
         source = SourceTrust.fromConfig(trust(url, certedhost='localhost'))
-        ctx = Context(receiver, readers=[requester.pre], sources=[source], maximumAge=3)
+        ctx = Context(receiver, readers=[requester.pre], sources=[source])
         puller = RegistrarPuller(requester, ctx, [source], interval=10, timeout=1)
         try:
+            client = testing.TestClient(ctx.app)
+            def cached():
+                return client.simulate_post('/', headers={'Content-Type': CESR_CONTENT_TYPE},
+                    body=signedQuery(requester, 'tels', {'i': rip.said}))
+            assert cached().status_code == 404
+            assert requests == []
             doing.Doist(real=True, tock=0.01, limit=0.7).do(
                 doers=[http.ServerDoer(server=server), puller])
             record = ctx.observations.observations.get((url,))
             assert requests == ['/']
             assert record.heads[rip.said] == bup.said
             assert puller.results[-1][0] == url
+            assert cached().status_code == 200
+            assert cached().status_code == 200
+            assert requests == ['/']  # cache reads cannot accelerate the poller
         finally:
             server.close()
             ctx.close()
@@ -381,8 +369,8 @@ def test_failed_source_request_does_not_stop_later_source(monkeypatch, failure):
             ctx.close()
 
 
-def test_source_rotation_requires_a_new_completed_observation(tmp_path):
-    """Persist old evidence while refusing to treat an old source as current."""
+def test_source_rotation_preserves_verified_registry_evidence(tmp_path):
+    """Source configuration changes do not invalidate independently verified registry evidence."""
     oldUrl = 'https://registrar-old.example/evidence'
     newUrl = 'https://registrar-new.example/evidence'
     with openHby(name='rotation-source', version=Vrsn_2_0) as issuer, \
@@ -397,7 +385,7 @@ def test_source_rotation_requires_a_new_completed_observation(tmp_path):
                 receiver,
                 readers=[reader.pre],
                 sources=[trust(url) for url in sources],
-                reger=RegBaser(
+                baser=RegBaser(
                     name='rotation', headDirPath=str(tmp_path), temp=False),
                 observations=ObservationBaser(
                     name='rotation', headDirPath=str(tmp_path), temp=False),
@@ -422,66 +410,127 @@ def test_source_rotation_requires_a_new_completed_observation(tmp_path):
 
             assert second.store.headEvent(rip.said).said == upd.said
             assert second.observations.observations.get((oldUrl,)) == old
-            assert request().status_code == 503
+            assert request().status_code == 200
             assert not second.observe(oldUrl, raw)['rejected']
             assert second.observations.observations.get((oldUrl,)) == old
-            assert request().status_code == 503
+            assert request().status_code == 200
             assert not second.observe(newUrl, raw)['rejected']
             assert request().status_code == 200
         finally:
             second.close()
 
 
-def test_pending_evidence_reopens_without_claiming_freshness(tmp_path):
-    """Recover accepted TEL state after KEL arrival without inventing an observation."""
-    url = 'https://registrar.example/evidence'
-    with openHby(name='pending-source', version=Vrsn_2_0) as issuer, \
-            openHby(name='pending-observer', headDirPath=str(tmp_path),
-                    temp=False, version=Vrsn_2_0) as receiver:
+@pytest.mark.parametrize('accepted_prefix', [False, True])
+@pytest.mark.parametrize('bound', [pytest.param(False, id='bsq'), pytest.param(True, id='bss')])
+def test_pending_evidence_reopens_without_claiming_freshness(tmp_path, accepted_prefix, bound):
+    """Isolate source scopes while pending successors invalidate only their registry."""
+    url, otherUrl = 'https://registrar.example/evidence', 'https://other.example/evidence'
+    with (openHby(name='pending-source', version=Vrsn_2_0) as issuer,
+          openHby(name='independent-source', version=Vrsn_2_0) as other):
         controller = issuer.makeHab(name='issuer')
-        reader = receiver.makeHab(name='reader')
-        rip, upd, _, raw = issuedEvidence(controller)
-        tel = raw[len(controller.replay(gvrsn=Vrsn_2_0)):]
+        rip, upd, credential, raw = issuedEvidence(controller, bound=bound)
+        otherRip, otherUpd, _, otherRaw = issuedEvidence(other.makeHab(name='other'))
+        before = bytes(controller.replay(gvrsn=Vrsn_2_0))
+        empty = Counter.enclose(qb64=b'', code=Codens.AttachmentGroup, version=Vrsn_2_0)
+        opening = boundOpening(controller, credential, 'revoked', bound)
+        successor = blindate(rip.said, upd.said, opening.said, sn=2)
+        controller.interact(data=[dict(i=rip.said, s=successor.sad['n'], d=successor.said)])
+        tail = successor.raw + Counter.enclose(qb64=Blinder.enclose([opening]),
+            code=Codens.AttachmentGroup, version=Vrsn_2_0)
+        complete = bytes(controller.replay(gvrsn=Vrsn_2_0)) + raw[len(before):] + tail
 
         def context():
-            return Context(
-                receiver,
-                readers=[reader.pre],
-                sources=[trust(url)],
-                reger=RegBaser(
-                    name='pending', headDirPath=str(tmp_path), temp=False),
-                observations=ObservationBaser(
-                    name='pending', headDirPath=str(tmp_path), temp=False),
-            )
+            """Reopen every cache owner, including config and signing keys, under this test."""
+            kwa = dict(name='pending-observer', base='test', temp=False,
+                       headDirPath=str(tmp_path), reopen=True)
+            receiver = Habery(name=kwa['name'], base=kwa['base'], temp=True, version=Vrsn_2_0,
+                ks=Keeper(**kwa), db=Baser(**kwa), cf=Configer(**kwa))
+            reader = receiver.habByName('reader') or receiver.makeHab(name='reader')
+            ctx = Context(receiver, readers=[reader.pre], sources=[trust(url), trust(otherUrl)],
+                baser=RegBaser(**kwa), observations=ObservationBaser(**kwa))
+            assert all(Path(owner.path).is_relative_to(tmp_path)
+                       for owner in (receiver.ks, receiver.db, receiver.cf, ctx.rgy.baser, ctx.observations))
+            return receiver, reader, ctx
 
-        first = context()
+        def request(ctx, reader, regid):
+            return testing.TestClient(ctx.app).simulate_post('/',
+                headers={'Content-Type': CESR_CONTENT_TYPE},
+                body=signedQuery(reader, 'tels', {'i': regid}))
+
+        receiver, reader, first = context()
         try:
-            result = first.observe(url, tel)
-            assert result['pending'] and not result['accepted']
-            assert first.observations.observations.get((url,)) is None
+            if accepted_prefix:
+                assert not first.observe(url, raw)['pending']
+                assert request(first, reader, rip.said).status_code == 200
+            prior = first.observations.observations.get((url,))
+            result = first.observe(url, tail if accepted_prefix else raw[len(before):] + tail)
+            assert result['pending'] and not result['rejected']
+            assert first.observations.observations.get((url,)) == prior
+            assert request(first, reader, rip.said).status_code == 503
+            result = first.observe(otherUrl, otherRaw)
+            assert not result['pending'] and not result['rejected']
+            assert result['heads'] == {otherRip.said: otherUpd.said}
+            observedOther = first.observations.observations.get((otherUrl,))
+            assert observedOther is not None
+            assert request(first, reader, otherRip.said).status_code == 200
         finally:
             first.close()
+            receiver.close()
 
-        second = context()
+        receiver, reader, second = context()
         try:
+            assert second.observations.observations.get((url,)) == prior
+            assert second.observations.observations.get((otherUrl,)) == observedOther
+            assert request(second, reader, rip.said).status_code == 503
+            assert request(second, reader, otherRip.said).status_code == 200
+            assert not second.observe(otherUrl, otherRaw)['pending']
+            # Ordinary KEL arrival accepts A's TEL, but does not complete a source pull.
             assert not second.ingest(controller.replay(gvrsn=Vrsn_2_0))['rejected']
-            assert second.store.headEvent(rip.said).said == upd.said
-            assert second.observations.observations.get((url,)) is None
-            response = testing.TestClient(second.app).simulate_post(
-                '/', headers={'Content-Type': CESR_CONTENT_TYPE},
-                body=signedQuery(reader, 'tels', {'i': rip.said}))
-            assert response.status_code == 503
+            assert second.store.headEvent(rip.said).said == successor.said
+            assert second.store.opening(successor.said).qb64 == opening.qb64
+            assert second.observations.observations.get((url,)) == prior
+            assert request(second, reader, rip.said).status_code == 200
+            assert not second.observe(url, raw)['rejected']  # stale prefix cannot renew
+            assert second.observations.observations.get((url,)) == prior
+            assert not second.observe(url, complete)['pending']
+            assert request(second, reader, rip.said).status_code == 200
+            # Native Regery refuses a rival at an accepted ordinal rather than
+            # staging the former Rever profile's missing-anchor candidate.
+            rival = blindate(rip.said, rip.said,
+                Blinder.blind(acdc=credential.said, state='revoked').said)
+            assert second.ingest(rival.raw + empty)['rejected']
+            assert second.store.seqEvent(rip.said, 1).said == upd.said
+            assert not second.observe(url, complete)['pending']
+            assert request(second, reader, rip.said).status_code == 200
+            assert not second.rgy.baser.maes.get(keys=rip.said, on=1)
+            # A source may expand its scope, but later omitting prior members cannot renew it.
+            assert not second.observe(otherUrl, complete + otherRaw)['pending']
+            membership = second.observations.observations.get((otherUrl,))
+            assert membership.heads == {rip.said: successor.said, otherRip.said: otherUpd.said}
+            assert not second.observe(otherUrl, otherRaw)['pending']
+            assert second.observations.observations.get((otherUrl,)) == membership
         finally:
             second.close()
+            receiver.close()
+
+        receiver, reader, third = context()
+        try:
+            assert third.observations.observations.get((otherUrl,)) == membership
+            assert third.store.seqEvent(rip.said, 1).said == upd.said
+            assert third.store.headEvent(rip.said).said == successor.said
+            assert not third.rgy.baser.maes.get(keys=rip.said, on=1)
+            assert request(third, reader, rip.said).status_code == 200
+            assert request(third, reader, otherRip.said).status_code == 200
+        finally:
+            third.close()
+            receiver.close()
 
 
 @pytest.mark.parametrize('value', [0, -1, float('nan'), float('inf')])
 def test_observation_durations_must_be_finite_and_positive(value):
-    """Reject invalid freshness and polling limits before scheduling work."""
+    """Reject invalid polling limits before scheduling work."""
     with openHby(name='duration-observer', version=Vrsn_2_0) as hby:
         hab = hby.makeHab(name='observer')
-        with pytest.raises(ValueError):
-            Context(hby, maximumAge=value)
         ctx = Context(hby)
         try:
             with pytest.raises(ValueError):
@@ -546,3 +595,33 @@ def test_full_evidence_pruner_survives_restart_and_cancellation(tmp_path, monkey
                 if deeds is not None:
                     doist.exit(deeds=deeds)
                 ctx.close()
+
+
+def test_cancelled_https_acquisition_closes_its_client():
+    """Scheduler cancellation closes the actual in-flight TLS connector."""
+    with (openHby(name='cancel-source', version=Vrsn_2_0) as issuer,
+          openHby(name='cancel-observer', version=Vrsn_2_0) as receiver):
+        controller = issuer.makeHab(name='issuer')
+        requester = receiver.makeHab(name='observer')
+        _, _, _, raw = issuedEvidence(controller)
+        server = tlsServer(raw)
+        url = f'https://127.0.0.1:{server.servant.ha[1]}/'
+        source = SourceTrust.fromConfig(trust(url, certedhost='localhost'))
+        ctx = Context(receiver, readers=[requester.pre], sources=[source])
+        puller = RegistrarPuller(requester, ctx, [source], interval=10, timeout=1)
+        doist = doing.Doist(tock=.01)
+        deeds = doist.enter(doers=[http.ServerDoer(server=server), puller])
+        try:
+            doist.recur(deeds=deeds)
+            active = puller.client
+            assert active is not None
+            assert not puller.results
+            doist.exit(deeds=deeds)
+            deeds = None
+            assert puller.client is None
+            assert not active.connector.opened
+        finally:
+            if deeds is not None:
+                doist.exit(deeds=deeds)
+            server.close()
+            ctx.close()

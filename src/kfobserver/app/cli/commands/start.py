@@ -14,13 +14,13 @@ from hio.base import doing
 from keri import __version__, help
 from keri.app import Configer, Habery, HaberyDoer, Keeper
 from keri.cli.common.existing import setupHby
-from keri.kering import AuthError, ConfigurationError, Vrsn_2_0
+from keri.kering import AuthError, Vrsn_2_0
 
-from kfobserver.core import serving, evidence
+from kfobserver.core import evidence
 
 
 d = "Runs KERI Foundation observer controller.\n"
-d += "Example:\nkf-observer start -a observer -H 6633 --registrar http://127.0.0.1:6632/\n"
+d += "Example:\nkf-observer start -a observer -H 6633 --registrar https://registrar.example/ --reader <AID> --registrar-ca <CA>\n"
 parser = argparse.ArgumentParser(description=d)
 parser.set_defaults(handler=lambda args: launch(args))
 parser.add_argument(
@@ -107,29 +107,14 @@ parser.add_argument(
           "Repeatable; DNS URLs use their URL hostname."),
 )
 parser.add_argument(
-    "--witness",
-    action="append",
-    dest="witnesses",
-    default=None,
-    help=(
-        "Witness base URL for issuer KEL fallback (GET /log). "
-        "Optional #AID for CESR-DESTINATION, e.g. http://127.0.0.1:5642/#B.... "
-        "Repeatable."
-    ),
-)
-parser.add_argument(
     "--poll",
     action="store",
     default=5.0,
     type=float,
     help="Seconds between full-clone registrar polls. Default is 5.0.",
 )
-parser.add_argument("--full-evidence", action="store_true",
-                    help="Use independent complete-proof polling and cache-only queries.")
 parser.add_argument("--reader", action="append", default=[], help="Authorized reader AID.")
 parser.add_argument("--kel", action="append", default=[], help="Signed KEL bootstrap path.")
-parser.add_argument("--maximum-age", type=float, default=15.0,
-                    help="Maximum completed-source observation age in seconds.")
 parser.add_argument("--timeout", type=float, default=5.0,
                     help="Per-source cooperative HTTP deadline in seconds.")
 parser.add_argument(
@@ -223,22 +208,12 @@ def runObserver(args, expire=0.0):
 
         hbyDoer = HaberyDoer(habery=hby)
         doers = [hbyDoer]
-        if args.full_evidence:
-            if args.witnesses:
-                raise ConfigurationError("full-evidence profile obtains witness evidence from registrar streams")
-            ctx, workers = evidence.setup(hby, alias=args.alias, host=args.host,
-                port=int(args.http), registrars=args.registrars, readers=args.reader,
-                kel=args.kel, maximumAge=args.maximum_age, interval=args.poll,
-                timeout=args.timeout, registrarCafilepath=args.registrarCa,
-                registrarCertedhosts=args.registrarCertedhosts,
-                keypath=args.keypath, certpath=args.certpath,
-                cafilepath=args.cafilepath)
-            doers.extend(workers)
-        else:
-            doers.extend(serving.setup(hby=hby, alias=args.alias, host=args.host,
-                port=int(args.http), registrars=args.registrars, witnesses=args.witnesses,
-                pollTock=float(args.poll), keypath=args.keypath,
-                certpath=args.certpath, cafilepath=args.cafilepath))
+        ctx, workers = evidence.setup(hby, alias=args.alias, host=args.host,
+            port=int(args.http), registrars=args.registrars, readers=args.reader,
+            kel=args.kel, interval=args.poll, timeout=args.timeout,
+            registrarCafilepath=args.registrarCa, registrarCertedhosts=args.registrarCertedhosts,
+            keypath=args.keypath, certpath=args.certpath, cafilepath=args.cafilepath)
+        doers.extend(workers)
 
         tock = 0.00125
         doist = doing.Doist(limit=expire, tock=tock, real=True)
