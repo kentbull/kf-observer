@@ -7,6 +7,7 @@ from collections import deque
 from dataclasses import asdict, dataclass, field
 import logging
 import ipaddress
+import ssl
 from math import isfinite
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -495,8 +496,10 @@ class RegistrarPuller(doing.DoDoer):
                 client = None
                 doer = None
                 try:
+                    # HIO also needs cafilepath to avoid reloading system roots.
                     client = http.clienting.Client(
                         scheme='https', hostname=target.hostname, port=target.port or 443,
+                        context=ssl.create_default_context(cafile=source.cafilepath),
                         cafilepath=source.cafilepath, certedhost=source.certedhost,
                         redirectable=False)
                     doer = SourceClientDoer(client=client)
