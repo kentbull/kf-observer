@@ -636,3 +636,30 @@ def test_cancelled_https_acquisition_closes_its_client():
                 doist.exit(deeds=deeds)
             server.close()
             ctx.close()
+
+
+def test_source_client_uses_only_configured_ca():
+    import ssl
+    import socket
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding
+    with openHby(name='observer-exclusive-ca', version=Vrsn_2_0) as hby:
+        hab = hby.makeHab(name='observer')
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0))
+        listener.listen()
+        source = SourceTrust.fromConfig(trust(f'https://127.0.0.1:{listener.getsockname()[1]}/', certedhost='localhost'))
+        ctx = Context(hby, sources=[source])
+        puller = RegistrarPuller(hab, ctx, [source])
+        clock = doing.Doist(tock=.03125)
+        try:
+            clock.deeds = clock.enter(doers=[puller])
+            clock.tick()
+            clock.recur()
+            context = puller.client.connector.context
+            assert context.get_ca_certs(binary_form=True) == [x509.load_pem_x509_certificate(SERVER_TLS.read_bytes()).public_bytes(Encoding.DER)]
+            assert context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED
+        finally:
+            clock.exit()
+            ctx.close()
+            listener.close()
