@@ -131,3 +131,24 @@ def introduceKel(req, rep, ctx):
     ctx.rgy.processEscrows()
     ctx._reconcileOpenings()
     rep.status = falcon.HTTP_204
+
+
+def preflightEnrollmentKel(raw):
+    """Check complete KEL-only framing without restricting legitimate dependency AIDs."""
+    if not raw or len(raw) > PUT_BODY_LIMIT:
+        raise falcon.HTTPBadRequest(description="invalid KEL replay size")
+    parser = Parser(version=Vrsn_2_0, local=False)
+    try:
+        generator = parser.groupParsator(ims=bytearray(raw), framed=True,
+                                         processive=False, local=False)
+        while True:
+            try:
+                next(generator)
+            except StopIteration as done:
+                events = done.value
+                break
+        if not events or any(not isinstance(dom.serder, SerderKERI)
+                             or dom.serder.ilk not in KEL_ILKS + ("rct",) for dom in events):
+            raise ValidationError("enrollment evidence must contain only complete KEL events")
+    except (ExtractionError, MaterialError, ValidationError) as ex:
+        raise falcon.HTTPBadRequest(description="invalid or incomplete KEL replay") from ex

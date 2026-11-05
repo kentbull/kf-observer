@@ -20,7 +20,7 @@ replay policy. There are no Observer-* freshness acceptance headers or gates.
 | Signed V2 `qry` `POST /`, route `tels/head` | Accepted KEL support and the accepted TEL head. |
 | `PUT /` with public signed KEL replay | Introduce one AID for request authentication. Full-stream framing/type/8 MiB size preflight precedes Kevery processing; no TEL intake through this endpoint. |
 
-POST requires an explicitly configured reader AID and actual request-author
+POST requires an explicitly configured or privately enrolled reader AID and actual request-author
 signatures or a valid own-KEL source seal, plus KRAM. Registrar bulk routes and
 credential-SAID status queries are refused. Responses carry independently
 verifiable evidence, not an application credential-standing verdict.
@@ -29,6 +29,23 @@ Explicitly public BSQ/BSS openings acquired from configured sources survive
 accepted storage, pending dependency recovery and reopen. The app attaches them
 to accepted HTTP evidence; core TEL clones remain body-only. Pending proofs are
 never served. The public service stores no registry roots.
+
+## Private account enrollment
+
+The normal CLI also starts a plain HTTP loopback-only boot listener on port
+`6634` (`--bootport`). `PUT /accounts/{aid}` accepts exactly
+`{"roles":["reader"],"kel":"<public signed CESR KEL>"}`. It preflights KEL-only
+evidence, verifies it through ordinary core owners and requires the target AID
+to be accepted before persisting its role. Supporting KEL for delegation and
+other dependencies may accompany the account KEL.
+
+PUT and GET return `{aid, roles, service}` with the actual observer service AID;
+GET returns `404` when no dynamic account exists. DELETE returns `204`
+idempotently and revokes dynamic access while preserving fixed `--reader`
+permissions. Roles survive service reopen in the existing observation store;
+account enrollment retains no secrets or private keys. Starting with no
+`--reader` denies all reads until enrollment. Fixed authenticated HTTPS registrars
+remain required.
 
 ## Install and run
 
@@ -46,7 +63,7 @@ kf-observer start \
   --registrar-certedhost 127.0.0.1=registrar.example \
   --kel /absolute/path/to/reader-kel.cesr \
   --poll 5 --timeout 5 \
-  --host 127.0.0.1 --http 6633
+  --host 127.0.0.1 --http 6633 --bootport 6634
 ```
 
 Repeat `--registrar`, `--reader` and bootstrap `--kel` as needed. Every outbound

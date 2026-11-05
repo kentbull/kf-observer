@@ -37,16 +37,24 @@ class Observation:
     heads: dict = field(default_factory=dict)
 
 
+@dataclass
+class ReaderAccount:
+    """Durable dynamic reader authorization, separate from protocol evidence."""
+    roles: list[str] = field(default_factory=list)
+
+
 class ObservationBaser(dbing.LMDBer):
     """Caller-owned LMDB persistence for completed source observations."""
     TailDirPath = 'keri/observer'
     AltTailDirPath = '.keri/observer'
 
     def reopen(self, **kwa):
-        """Open the existing ``observations.`` URL-keyed records unchanged."""
+        """Open source observations and dynamic reader accounts in this owned store."""
         super().reopen(**kwa)
         self.observations = koming.Komer(
             db=self, subkey='observations.', klas=Observation)
+        self.accounts = koming.Komer(
+            db=self, subkey='accounts.', klas=ReaderAccount)
         return self.opened
 
 

@@ -22,6 +22,7 @@ from keri.core.signing import Salter
 from keri.help import helping
 
 from kfobserver.core.evidence import Context
+from kfobserver.core.evidence_observing import ObservationBaser
 
 
 STAMP0 = "2025-07-04T17:50:00.000000+00:00"
@@ -106,7 +107,7 @@ def _seedObserverTel(hby, issuer):
 
 
 @contextmanager
-def _remoteSignerLab(name):
+def _remoteSignerLab(name, *, authorize=True, observations=None):
     """Keep registry issuer, query signer, and Observer in separate Haberies."""
     with ExitStack() as stack:
         issuerHby = stack.enter_context(
@@ -120,9 +121,10 @@ def _remoteSignerLab(name):
         )
         issuer = issuerHby.makeHab(name="issuer")
         signer = signerHby.makeHab(name="wallet")
-        observerHby.makeHab(name="observer")
+        observer = observerHby.makeHab(name="observer")
         ripper, bup, _blinder, _acdc, tel = _seedObserverTel(issuerHby, issuer)
-        ctx = Context(observerHby, readers=[signer.pre])
+        ctx = Context(observerHby, hab=observer, readers=[signer.pre] if authorize else [],
+                      observations=observations)
         stack.callback(ctx.close)
         issuerKel = b"".join(issuer.db.clonePreIter(pre=issuer.pre, gvrsn=Vrsn_2_0))
         Parser(version=Vrsn_2_0).parse(ims=bytearray(issuerKel), kvy=ctx.kvy)
@@ -148,44 +150,67 @@ def _signedTelQuery(client, hab, regk, endorser=None):
     )
 
 
-def test_put_introduces_remote_signer_for_authenticated_tel_query():
-    """PUT makes public history available; KRAM still authenticates POST."""
-    with _remoteSignerLab("observer-remote-signer") as (
-        issuer,
-        signer,
-        observerHby,
-        _ctx,
-        client,
-        regk,
-        tel,
+def test_put_introduces_remote_signer_for_authenticated_tel_query(tmp_path):
+    """Public history does not grant a role; private enrollment survives reopen and revoke."""
+    observations = ObservationBaser(name="reader-enrollment", temp=False, headDirPath=str(tmp_path))
+    with _remoteSignerLab("observer-remote-signer", authorize=False, observations=observations) as (
+        issuer, signer, observerHby, ctx, client, regk, tel,
     ):
         assert issuer.pre != signer.pre
         assert signer.pre not in observerHby.kevers
-        assert _signedTelQuery(client, signer, regk).status == falcon.HTTP_401
-
+        # Public introduction establishes identity, but only private enrollment grants access.
+        assert _signedTelQuery(client, signer, regk).status == falcon.HTTP_403
         replay = _signerKel(signer)
-        response = _putKel(client, replay, f"{CESR_CONTENT_TYPE}; charset=utf-8")
-        assert response.status == falcon.HTTP_204
-        assert response.content == b""
+        assert _putKel(client, replay).status == falcon.HTTP_204
         assert signer.pre in observerHby.kevers
-
-        assert _signedTelQuery(client, signer, regk).status == falcon.HTTP_200
+        assert _signedTelQuery(client, signer, regk).status == falcon.HTTP_403
+        admin = testing.TestClient(ctx.internalApp)
+        path = f"/accounts/{signer.pre}"
+        assert admin.simulate_get(path).status_code == 404
+        assert admin.simulate_put("/accounts/not-an-aid", json={'roles': ['reader'], 'kel': replay.decode()}).status_code == 400
+        assert admin.simulate_get(f"/accounts/{signer.pre}extra").status_code == 400
+        assert admin.simulate_delete("/accounts/not-an-aid").status_code == 400
+        assert admin.simulate_put(path, json={'roles': ['reader'], 'kel': tel.decode()}).status_code == 400
+        assert signer.pre not in ctx.readers
+        assert ctx.observations.accounts.get((signer.pre,)) is None
+        signer.rotate()
+        # The issuer's accepted KEL supports the TEL and legitimately accompanies the reader KEL.
+        replay = _signerKel(issuer) + _signerKel(signer)
+        assert observerHby.kevers[signer.pre].sn == 0
+        response = admin.simulate_put(path, json={'roles': ['reader'], 'kel': replay.decode()})
+        assert response.status_code == 200
+        assert observerHby.kevers[signer.pre].sn == 1
+        assert response.json == dict(aid=signer.pre, roles=['reader'], service=ctx.hab.pre)
+        assert admin.simulate_get(path).json == response.json
         assert _telBodies(_signedTelQuery(client, signer, regk).content) == _telBodies(tel)
-        with openHby(
-            name="observer-remote-attacker", base="test", temp=True, version=Vrsn_2_0
-        ) as attackerHby:
+        with openHby(name="observer-remote-attacker", base="test", temp=True, version=Vrsn_2_0) as attackerHby:
             attacker = attackerHby.makeHab(name="attacker")
-            assert (
-                _signedTelQuery(client, signer, regk, endorser=attacker).status
-                == falcon.HTTP_401
-            )
-        unsigned = _telQuery(signer, regk)
-        assert (
-            client.simulate_post(
-                "/", body=unsigned.raw, headers={"Content-Type": CESR_CONTENT_TYPE}
-            ).status
-            == falcon.HTTP_400
-        )
+            assert _signedTelQuery(client, signer, regk, endorser=attacker).status == falcon.HTTP_401
+        assert client.simulate_post("/", body=_telQuery(signer, regk).raw,
+            headers={"Content-Type": CESR_CONTENT_TYPE}).status == falcon.HTTP_400
+
+        # Reopen the permission store, then revoke dynamic access without cutting a fixed reader.
+        ctx.close()
+        observations.reopen()
+        reopened = Context(observerHby, hab=observerHby.habByName("observer"), observations=observations,
+                           readers=[issuer.pre])
+        try:
+            assert not reopened.ingest(tel)['rejected']
+            client = testing.TestClient(reopened.app)
+            admin = testing.TestClient(reopened.internalApp)
+            assert admin.simulate_get(path).json['roles'] == ['reader']
+            assert _signedTelQuery(client, signer, regk).status_code == 200
+            assert admin.simulate_delete(path).status_code == 204
+            assert admin.simulate_delete(path).status_code == 204
+            assert _signedTelQuery(client, signer, regk).status_code == 403
+            assert admin.simulate_get(path).status_code == 404
+            static = f"/accounts/{issuer.pre}"
+            assert admin.simulate_put(static, json={'roles': ['reader'], 'kel': _signerKel(issuer).decode()}).status_code == 200
+            assert admin.simulate_delete(static).status_code == 204
+            assert issuer.pre in reopened.readers
+            assert _signedTelQuery(client, issuer, regk).status_code == 200
+        finally:
+            reopened.close()
 
 
 def test_put_replay_is_idempotent_and_accepts_older_history_after_rotation():

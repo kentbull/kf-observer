@@ -38,6 +38,10 @@ parser.add_argument(
     help="Local port number the HTTP server listens on. Default is 6633.",
 )
 parser.add_argument(
+    "--bootport", type=int, default=6634,
+    help="Private loopback account-enrollment port. Default is 6634.",
+)
+parser.add_argument(
     "-o",
     "--host",
     action="store",
@@ -209,7 +213,7 @@ def runObserver(args, expire=0.0):
         hbyDoer = HaberyDoer(habery=hby)
         doers = [hbyDoer]
         ctx, workers = evidence.setup(hby, alias=args.alias, host=args.host,
-            port=int(args.http), registrars=args.registrars, readers=args.reader,
+            port=int(args.http), bootport=args.bootport, registrars=args.registrars, readers=args.reader,
             kel=args.kel, interval=args.poll, timeout=args.timeout,
             registrarCafilepath=args.registrarCa, registrarCertedhosts=args.registrarCertedhosts,
             keypath=args.keypath, certpath=args.certpath, cafilepath=args.cafilepath)
