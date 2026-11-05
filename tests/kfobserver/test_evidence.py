@@ -27,6 +27,17 @@ from kfobserver.core.evidence_observing import (
 
 
 TLS_DIR = Path(__file__).parents[1] / 'tls'
+# Combined test-only private key/certificate; never use outside these tests.
+# Regenerate from the repository root:
+# fixture_dir=$(mktemp -d)
+# openssl req -x509 -newkey rsa:2048 -noenc -sha256 -days 3650 \
+#   -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost' \
+#   -addext 'basicConstraints=critical,CA:TRUE' \
+#   -addext 'keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign' \
+#   -addext 'extendedKeyUsage=serverAuth' \
+#   -keyout "$fixture_dir/key.pem" -out "$fixture_dir/cert.pem"
+# cat "$fixture_dir/key.pem" "$fixture_dir/cert.pem" > tests/tls/server.pem
+# rm -r "$fixture_dir"
 SERVER_TLS = TLS_DIR / 'server.pem'
 WRONG_TLS = TLS_DIR / 'client.pem'
 
