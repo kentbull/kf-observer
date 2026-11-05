@@ -37,7 +37,9 @@ def test_installed_cli_runs_its_own_http_service(tmp_path, scenario):
         tmp_path: private logs; the unique base owns this test's store namespace.
         scenario: new, encrypted, or clear Keeper with valid/absent/irrelevant passcode.
     """
-    external = port()
+    external, internal = port(), port()
+    while internal == external:
+        internal = port()
     name, base = "cli-parity", "cli-" + uuid4().hex
     encrypted = scenario == "fresh" or scenario.startswith("encrypted")
     before = None
@@ -60,8 +62,7 @@ def test_installed_cli_runs_its_own_http_service(tmp_path, scenario):
     with log.open("wb") as output:
         proc = subprocess.Popen([
             "kf-observer", "start", "--name", name, "--base", base,
-            "--alias", "observer", "--http", str(external),
-            "--reader", "explicit-unused-test-role",
+            "--alias", "observer", "--http", str(external), "--bootport", str(internal),
             "--registrar", "https://127.0.0.1:1/",
             "--registrar-ca", str(SERVER_TLS),
             "--registrar-certedhost", "127.0.0.1=localhost",
@@ -74,7 +75,7 @@ def test_installed_cli_runs_its_own_http_service(tmp_path, scenario):
                     assert "prompting is disabled" in log.read_text()
             else:
                 deadline = time.monotonic() + 15
-                for endpoint in (external,):
+                for endpoint in (external, internal):
                     while True:
                         if proc.poll() is not None:
                             raise AssertionError(log.read_text())
