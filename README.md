@@ -1,6 +1,6 @@
 # kf-observer
 
-`kf-observer` independently verifies native ACDC registry evidence from configured
+`kf-observer` independently verifies v2 ACDC registry evidence from configured
 HTTPS registrars and serves an authenticated local cache. Kevery verifies KEL;
 Regery alone accepts RIP/BUP events through ordinary anchor/order checks. The
 service owns HTTP policy, polling, source trust and store lifecycle.
@@ -80,7 +80,7 @@ cache query imply publication recency.
 
 The former bare-TEL/on-demand/witness profile and its selectors are removed.
 The ordinary KERI v1 event-body lane in the core parser is preserved. See the
-[test migration and donor accounting](docs/native-observer-migration.md).
+[test migration and donor accounting](docs/v2-observer-migration.md).
 
 ## Checks
 

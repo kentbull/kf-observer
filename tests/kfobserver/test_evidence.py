@@ -538,7 +538,7 @@ def test_pending_evidence_reopens_without_claiming_freshness(tmp_path, accepted_
             assert second.observations.observations.get((url,)) == prior
             assert not second.observe(url, complete)['pending']
             assert request(second, reader, rip.said).status_code == 200
-            # Native Regery refuses a rival at an accepted ordinal rather than
+            # Core Regery refuses a rival at an accepted ordinal rather than
             # staging the former Rever profile's missing-anchor candidate.
             rival = blindate(rip.said, rip.said,
                 Blinder.blind(acdc=credential.said, state='revoked').said)

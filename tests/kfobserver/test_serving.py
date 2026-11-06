@@ -234,8 +234,8 @@ def test_put_replay_is_idempotent_and_accepts_older_history_after_rotation():
         assert observerHby.kevers[signer.pre].sn == 1
 
 
-def test_put_accepts_native_recovery_replay_and_repeat():
-    with _remoteSignerLab("observer-native-recovery") as (
+def test_put_accepts_v2_recovery_replay_and_repeat():
+    with _remoteSignerLab("observer-v2-recovery") as (
         _issuer,
         _signer,
         observerHby,
@@ -245,7 +245,7 @@ def test_put_accepts_native_recovery_replay_and_repeat():
         _tel,
     ):
         with openHby(
-            name="observer-native-recovery-source",
+            name="observer-v2-recovery-source",
             base="test",
             temp=True,
             version=Vrsn_2_0,

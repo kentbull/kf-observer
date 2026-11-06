@@ -1,4 +1,4 @@
-"""HTTP request authentication and public KEL introduction for the native observer."""
+"""HTTP request authentication and public KEL introduction for the v2 observer."""
 from dataclasses import asdict
 import json
 import falcon

@@ -194,7 +194,7 @@ def signedQuery(hab, route, attributes=None):
 
 
 class ObservedEvidence(doing.DoDoer):
-    """Own native verification, source acquisition telemetry and public proofs."""
+    """Own v2 verification, source acquisition telemetry and public proofs."""
     def __init__(self, hby, *, baser=None, observations=None, sources=(), config=None):
         self.sources = tuple(SourceTrust.fromConfig(source) for source in sources)
         self.urls = frozenset(source.url for source in self.sources)
@@ -259,7 +259,7 @@ class ObservedEvidence(doing.DoDoer):
                         disclosures.append((serder, opening))
                 else:
                     if serder.ilk not in ("icp", "dip", "rot", "drt", "ixn", "rct"):
-                        raise ValidationError("observer intake accepts only public KEL and native TEL")
+                        raise ValidationError("observer intake accepts only public KEL and v2 TEL")
                     self.parser.msgProcess(asdict(dom), kvy=self.kvy, tvy=None,
                                            exc=None, rvy=None, vry=None)
             except (MissingSignatureError, MissingWitnessSignatureError,
@@ -310,7 +310,7 @@ class ObservedEvidence(doing.DoDoer):
 
 
     def _disclosedOpening(self, event, dom):
-        """Validate an explicitly supplied opening before native TEL processing."""
+        """Validate an explicitly supplied opening before v2 TEL processing."""
         from keri.acdc.regeventing import vetBlind
         supplied = [(BlindState, values) for values in dom.bsqs]
         supplied.extend((BoundState, values) for values in dom.bsss)
