@@ -81,9 +81,18 @@ def test_installed_cli_runs_its_own_http_service(tmp_path, scenario):
                             raise AssertionError(log.read_text())
                         try:
                             with urlopen(f"http://127.0.0.1:{endpoint}/health", timeout=.3) as response:
-                                # Only the private listener reports per-source pull outcomes.
-                                expected = {"status": "ok"} if endpoint == external else {"status": "ok", "sources": {}}
-                                assert json.load(response) == expected
+                                health = json.load(response)
+                            # Only the private listener reports per-source pull outcomes.
+                            if endpoint == external:
+                                assert health == {"status": "ok"}
+                            else:
+                                # The unreachable registrar pull may already have finished.
+                                assert health.pop("status") == "ok"
+                                sources = health.pop("sources")
+                                assert health == {}
+                                assert set(sources) <= {"https://127.0.0.1:1/"}
+                                for entry in sources.values():
+                                    assert entry["outcome"] in ("transport_error", "timeout")
                             break
                         except OSError:
                             if time.monotonic() >= deadline:
