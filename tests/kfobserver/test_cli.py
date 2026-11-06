@@ -81,7 +81,9 @@ def test_installed_cli_runs_its_own_http_service(tmp_path, scenario):
                             raise AssertionError(log.read_text())
                         try:
                             with urlopen(f"http://127.0.0.1:{endpoint}/health", timeout=.3) as response:
-                                assert json.load(response) == {"status": "ok"}
+                                # Only the private listener reports per-source pull outcomes.
+                                expected = {"status": "ok"} if endpoint == external else {"status": "ok", "sources": {}}
+                                assert json.load(response) == expected
                             break
                         except OSError:
                             if time.monotonic() >= deadline:
