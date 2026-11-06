@@ -70,7 +70,6 @@ def introduceKel(req, rep, ctx):
         raise falcon.HTTPBadRequest(description="KEL replay was not fully accepted")
     ctx.kvy.processEscrows()
     ctx.rgy.processEscrows()
-    ctx._reconcileOpenings()
     rep.status = falcon.HTTP_204
 
 
