@@ -4,7 +4,7 @@ This application owns configured-source acquisition.  KERIpy still
 owns the shared evidence processors and durable registry stores.
 """
 from collections import deque
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 import logging
 import ipaddress
 import ssl
@@ -17,14 +17,10 @@ from hio.core import http
 from keri import Vrsn_2_0
 from keri.acdc import Regery
 from keri.core import (BlindState, Blinder, BoundState, Codens, Counter,
-                       Kevery, Number, NumDex, Parser, SerderACDC, query)
+                       Kevery, Number, SerderACDC, query)
 from keri.core.kraming import Pruner
-from keri.db.dbing import snKey
 from keri.db.subing import Suber
-from keri.kering import (ConfigurationError, KeriError, ValidationError, MissingSignatureError,
-    MissingWitnessSignatureError, MissingDelegationError, OutOfOrderError,
-    MissingDelegableApprovalError, UnverifiedReceiptError,
-    UnverifiedWitnessReceiptError, UnverifiedTransferableReceiptError)
+from keri.kering import ConfigurationError, KeriError, ValidationError
 from keri.app.httping import CESR_CONTENT_TYPE
 from keri.db import dbing, koming
 from keri.help import helping
@@ -209,7 +205,6 @@ class ObservedEvidence(doing.DoDoer):
         self.rgy = Regery(hby, baser=baser, name=hby.name, base=hby.base, temp=hby.temp)
         self.store = self.rgy.store
         self.pendingOpenings = Suber(db=self.rgy.baser, subkey="observer.pending-openings.")
-        self.parser = Parser(kvy=self.kvy, rgy=self.rgy, local=False, version=Vrsn_2_0)
         self.pruner = Pruner(self.kvy.kramer, tock=1.0)
         self.observations = observations if observations is not None else ObservationBaser(
             name=hby.name, base=hby.base, temp=hby.temp)
@@ -237,100 +232,43 @@ class ObservedEvidence(doing.DoDoer):
         """Process public KEL/TEL evidence using the observer's concrete owners.
 
         Only an authorized publisher opts into retaining disclosed openings.
-        Acceptance and dependency persistence belong to Kevery and Regery;
-        this method reports their final outcomes without another pending queue.
+        Core ``Regery.ingest`` owns intake, acceptance, dependency escrows and
+        the disclosed-opening rule; this method summarizes its per-event
+        outcomes, with heads taken from accepted events in this response,
+        without another pending queue.
         """
-        ims = bytearray(raw)
+        outcomes, refusal = self.rgy.ingest(raw, kvy=self.kvy)
         summary = dict(accepted={}, pending={}, rejected={}, heads={})
-        events, dependencies, disclosures = [], [], []
-        while ims:
-            serder = None
-            try:
-                before = len(ims)
-                dom = self.parser.parseOneBare(ims=ims, processive=False, local=False)
-                if dom is None or dom.serder is None or len(ims) >= before:
-                    raise ValidationError("invalid or incomplete evidence frame")
-                serder = dom.serder
-                if isinstance(serder, SerderACDC):
-                    opening = self._disclosedOpening(serder, dom)
-                    self.rgy.processEvent(serder, sscs=dom.sscs, ssts=dom.ssts)
-                    events.append(serder)
-                    if publish and opening is not None:
-                        disclosures.append((serder, opening))
-                else:
-                    if serder.ilk not in ("icp", "dip", "rot", "drt", "ixn", "rct"):
-                        raise ValidationError("observer intake accepts only public KEL and v2 TEL")
-                    self.parser.msgProcess(asdict(dom), kvy=self.kvy, tvy=None,
-                                           exc=None, rvy=None, vry=None)
-            except (MissingSignatureError, MissingWitnessSignatureError,
-                    MissingDelegationError, OutOfOrderError,
-                    MissingDelegableApprovalError, UnverifiedReceiptError,
-                    UnverifiedWitnessReceiptError,
-                    UnverifiedTransferableReceiptError) as ex:
-                if serder is not None and not isinstance(serder, SerderACDC) and self._kelPending(serder):
-                    dependencies.append(serder)
-                    continue
-                summary["rejected"]["stream"] = str(ex) or type(ex).__name__
-                break
-            except Exception as ex:
-                summary["rejected"]["stream"] = str(ex) or type(ex).__name__
-                break
-        self.kvy.processEscrows()
-        self.rgy.processEscrows()
-        for event in dependencies:
-            if self._kelPending(event):
-                key = f"kel:{event.pre}"
-                summary["pending"][key] = summary["pending"].get(key, 0) + 1
-            elif self.hby.db.kels.getLast(keys=event.pre, on=event.sn) != event.said:
-                summary["rejected"][f"kel:{event.pre}:{event.snh}"] = "dependency was not accepted or retained"
-        for event in events:
+        if refusal is not None:
+            summary["rejected"]["stream"] = refusal
+        for outcome in outcomes:
+            event, status = outcome.serder, outcome.status
+            if not isinstance(event, SerderACDC):
+                # Accepted public KEL is ordinary key state, not a summary entry.
+                if status == "pending":
+                    key = f"kel:{event.pre}"
+                    summary["pending"][key] = summary["pending"].get(key, 0) + 1
+                elif status == "rejected":
+                    summary["rejected"][f"kel:{event.pre}:{event.snh}"] = "dependency was not accepted or retained"
+                continue
             regk = event.said if event.ilk == "rip" else event.sad["rd"]
-            sn = Number(numh=event.sad["n"]).num
-            accepted = self.store.seqSaider(regk, sn)
-            if accepted is not None and accepted.qb64 == event.said:
-                bucket = "accepted"
+            summary[status][regk] = summary[status].get(regk, 0) + 1
+            if status == "accepted":
+                sn = Number(numh=event.sad["n"]).num
                 previous = summary["heads"].get(regk)
                 if previous is None or Number(numh=self.store.event(previous).sad["n"]).num < sn:
                     summary["heads"][regk] = event.said
-            else:
-                pending = self._telPending(event)
-                bucket = "pending" if pending else "rejected"
-            summary[bucket][regk] = summary[bucket].get(regk, 0) + 1
-        for event, opening in disclosures:
-            accepted = self.store.seqSaider(event.sad["rd"], Number(numh=event.sad["n"]).num)
-            if accepted is not None and accepted.qb64 == event.said:
-                self.store.putOpening(event.said, opening)
-            elif self._telPending(event):
+            if not publish or outcome.opening is None:
+                continue
+            if status == "accepted":
+                self.store.putOpening(event.said, outcome.opening)
+            elif status == "pending":
                 existing = self.pendingOpenings.get(event.said)
-                if existing is not None and existing != opening.qb64:
+                if existing is not None and existing != outcome.opening.qb64:
                     raise ValidationError("pending public opening is immutable")
-                self.pendingOpenings.put(event.said, opening.qb64)
+                self.pendingOpenings.put(event.said, outcome.opening.qb64)
         self._reconcileOpenings()
         return summary
-
-
-    def _disclosedOpening(self, event, dom):
-        """Validate an explicitly supplied opening before v2 TEL processing."""
-        from keri.acdc.regeventing import vetBlind
-        supplied = [(BlindState, values) for values in dom.bsqs]
-        supplied.extend((BoundState, values) for values in dom.bsss)
-        if not supplied:
-            return None
-        if event.ilk != "bup" or len(supplied) != 1:
-            raise ValidationError("only a BUP may carry one disclosed opening")
-        clan, values = supplied[0]
-        opening = Blinder(data=clan(*values))
-        vetBlind(opening, blid=event.sad["b"])
-        return opening
-
-
-    def _telPending(self, event):
-        """Match the exact BUP/RIP in the core's ordinary dependency escrow."""
-        regk = event.said if event.ilk == "rip" else event.sad["rd"]
-        sn = Number(numh=event.sad["n"]).num
-        return any((event.said,) in escrow.get(keys=regk, on=sn)
-                   for escrow in (self.rgy.baser.maes, self.rgy.baser.ooes))
-
 
     def _reconcileOpenings(self):
         """Promote authorized disclosures only after accepted TEL membership.
@@ -357,26 +295,11 @@ class ObservedEvidence(doing.DoDoer):
                             break
                     else:
                         raise ValidationError("invalid pending public opening")
-                elif self._telPending(event):
+                elif self.store.escrowed(event.sad["rd"], Number(numh=event.sad["n"]).num, said):
                     continue
             except (KeriError, ValueError, TypeError):
                 logger.warning("Discarding invalid pending public opening %s", said)
             self.pendingOpenings.rem(said)
-
-
-    def _kelPending(self, event):
-        """Report only exact dependencies retained by the ordinary KEL escrows."""
-        db = self.hby.db
-        if event.ilk != "rct":
-            if any(event.said in escrow.get(keys=event.pre, on=event.sn)
-                   for escrow in (db.pses, db.pwes, db.pdes, db.ooes)):
-                return True
-            return event.said in db.delegables.get(keys=snKey(event.pre, event.sn))
-        if any(said == event.said for said, _ in db.uwes.get(keys=event.pre, on=event.sn)):
-            return True
-        receipts = db.ures.get(keys=(event.pre, Number(num=event.sn, code=NumDex.Huge).qb64))
-        receipts += db.vres.get(keys=snKey(event.pre, event.sn))
-        return any(receipt[0].qb64 == event.said for receipt in receipts)
 
 
     def clone(self, regks=None, sn=0):

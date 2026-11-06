@@ -2,9 +2,10 @@
 import falcon
 from keri.core import Number
 
-from keri.app.httping import CESR_CONTENT_TYPE
+from keri.app.httping import CESR_CONTENT_TYPE, parseSignedQuery
 from keri.kering import ValidationError
-from kfobserver.app.httping import _parseQuery, _authenticateQuery, introduceKel
+
+from kfobserver.app.httping import _authenticateQuery, introduceKel
 
 
 class QueryEnd:
@@ -20,7 +21,7 @@ class QueryEnd:
         missing history or pending dependencies yield HTTP errors. A read never pulls
         from an upstream source or claims new observation freshness.
         """
-        serder, qry = _authenticateQuery(_parseQuery(req), self.ctx, self.ctx.readers,
+        serder, qry = _authenticateQuery(parseSignedQuery(req), self.ctx, self.ctx.readers,
                                          ('tels', 'tels/head'))
         regk = qry.get('i')
         if not isinstance(regk, str) or not regk or 'vcid' in qry:
