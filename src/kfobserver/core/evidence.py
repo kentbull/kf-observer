@@ -21,9 +21,19 @@ from kfobserver.core.evidence_querying import QueryEnd
 
 class HealthEnd:
     """Report listener availability without making an evidence claim."""
+    def __init__(self, sources=None):
+        """Bind an optional zero-argument callable returning per-source pull outcomes."""
+        self.sources = sources
+
     def on_get(self, req, rep):
-        """Set the Falcon response media to local listener health; req is unused."""
+        """Set the Falcon response media to local listener health; req is unused.
+
+        The private listener adds the last pull outcome per configured source
+        (outcome, reason, lastPull); the public listener reports status only.
+        """
         rep.media = {'status': 'ok'}
+        if self.sources is not None:
+            rep.media['sources'] = self.sources()
 
 
 def _validAccountAid(aid):
@@ -111,7 +121,8 @@ class Context(ObservedEvidence):
             self.close()
             raise
         self.internalApp = falcon.App()
-        self.internalApp.add_route("/health", HealthEnd())
+        self.sourceStatus = {}
+        self.internalApp.add_route("/health", HealthEnd(lambda: dict(self.sourceStatus)))
         self.internalApp.add_route("/accounts/{aid}", AccountEnd(self))
         self.app = falcon.App()
         self.app.add_route("/", QueryEnd(self))
@@ -160,6 +171,7 @@ def setup(hby, *, alias="observer", host="127.0.0.1", port=6633, bootport=6634,
             if result["rejected"] or result["pending"]:
                 raise ConfigurationError("observer bootstrap evidence is incomplete or invalid")
         poller = RegistrarPuller(hab, ctx, sources, interval=interval, timeout=timeout)
+        ctx.sourceStatus = poller.status
         server = createHttpServer(host=host, port=port, app=ctx.app,
             keypath=keypath, certpath=certpath, cafilepath=cafilepath)
         bootServer = createHttpServer(host="127.0.0.1", port=bootport, app=ctx.internalApp)

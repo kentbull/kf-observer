@@ -264,6 +264,8 @@ def test_real_https_source_records_exact_url_observation():
             assert requests == ['/']
             assert record.heads[rip.said] == bup.said
             assert puller.results[-1][0] == url
+            assert puller.status[url]['outcome'] == 'valid'
+            assert puller.status[url]['lastPull']
             assert cached().status_code == 200
             assert cached().status_code == 200
             assert requests == ['/']  # cache reads cannot accelerate the poller
@@ -276,7 +278,7 @@ def test_real_https_source_records_exact_url_observation():
     (WRONG_TLS, 'localhost'),
     (SERVER_TLS, 'wrong.example'),
 ])
-def test_wrong_source_ca_or_hostname_records_no_freshness(ca, certedhost):
+def test_wrong_source_ca_or_hostname_records_no_freshness(ca, certedhost, caplog):
     """Contain real TLS failures and leave the source observation absent."""
     with (openHby(name='bad-tls-source', version=Vrsn_2_0) as issuer,
           openHby(name='bad-tls-observer', version=Vrsn_2_0) as receiver):
@@ -296,6 +298,37 @@ def test_wrong_source_ca_or_hostname_records_no_freshness(ca, certedhost):
             assert requests == []
             assert 'transport_error' in puller.results[-1][1]
             assert puller.client is None
+            ctx.sourceStatus = puller.status
+            health = testing.TestClient(ctx.internalApp).simulate_get('/health').json
+            assert health['status'] == 'ok'
+            assert health['sources'][url]['outcome'] == 'transport_error'
+            assert health['sources'][url]['reason']
+            assert f'Source {url} pull outcome=transport_error' in caplog.text
+        finally:
+            server.close()
+            ctx.close()
+
+
+def test_refused_source_evidence_is_reported_with_reason(caplog):
+    """Surface a refused source pull in the log and private health payload."""
+    with (openHby(name='refused-source', version=Vrsn_2_0) as issuer,
+          openHby(name='refused-observer', version=Vrsn_2_0) as receiver):
+        issuer.makeHab(name='issuer')
+        requester = receiver.makeHab(name='observer')
+        server = tlsServer(b'{"not":"cesr evidence"}')
+        url = f'https://127.0.0.1:{server.servant.ha[1]}/'
+        source = SourceTrust.fromConfig(trust(url, certedhost='localhost'))
+        ctx = Context(receiver, readers=[requester.pre], sources=[source])
+        puller = RegistrarPuller(requester, ctx, [source], interval=10, timeout=1)
+        try:
+            doing.Doist(real=True, tock=0.01, limit=0.7).do(
+                doers=[http.ServerDoer(server=server), puller])
+            ctx.sourceStatus = puller.status
+            entry = testing.TestClient(ctx.internalApp).simulate_get('/health').json['sources'][url]
+            assert entry['outcome'] == 'refused'
+            assert entry['reason']
+            assert ctx.observations.observations.get((url,)) is None
+            assert f'Source {url} pull outcome=refused' in caplog.text
         finally:
             server.close()
             ctx.close()

@@ -270,10 +270,10 @@ class ObservedEvidence(doing.DoDoer):
                 if serder is not None and not isinstance(serder, SerderACDC) and self._kelPending(serder):
                     dependencies.append(serder)
                     continue
-                summary["rejected"]["stream"] = str(ex)
+                summary["rejected"]["stream"] = str(ex) or type(ex).__name__
                 break
             except Exception as ex:
-                summary["rejected"]["stream"] = str(ex)
+                summary["rejected"]["stream"] = str(ex) or type(ex).__name__
                 break
         self.kvy.processEscrows()
         self.rgy.processEscrows()
@@ -481,8 +481,40 @@ class RegistrarPuller(doing.DoDoer):
         self.urls = tuple(source.url for source in self.sources)
         self.interval, self.timeout = interval, timeout
         self.results = deque(maxlen=32)
+        self.status = {}
         self.client = None
         super().__init__(doers=[doing.doify(self.pollDo)], tock=tock)
+
+    def record(self, url, result):
+        """Retain, log and expose the latest outcome of one source pull.
+
+        Evidence results become valid, pending, revoked (a held opening of an
+        accepted head states revocation) or refused with the first rejection
+        reason; transport and HTTP failures keep their own labels. Only the last
+        outcome per source is kept, so no new store or history is introduced.
+        """
+        self.results.append((url, result))
+        if isinstance(result, dict) and 'transport_error' in result:
+            outcome, reason = 'transport_error', result['transport_error']
+        elif isinstance(result, dict):
+            outcome, reason = 'valid', None
+            if result['rejected']:
+                outcome, reason = 'refused', next(iter(result['rejected'].values()))
+            elif result['pending']:
+                outcome = 'pending'
+            else:
+                for said in result['heads'].values():
+                    opening = self.observer.store.opening(said)
+                    if opening is not None and opening.state == 'revoked':
+                        outcome = 'revoked'
+        else:
+            outcome, reason = result, None
+        entry = dict(outcome=outcome, reason=reason, lastPull=helping.nowIso8601())
+        self.status[url] = entry
+        if outcome in ('valid', 'pending', 'revoked'):
+            logger.info("Source %s pull outcome=%s", url, outcome)
+        else:
+            logger.warning("Source %s pull outcome=%s reason=%s", url, outcome, reason)
 
     def pollDo(self, tymth=None, tock=0.03125, **kwa):
         """Acquire one bounded response without letting TLS failure stop peers."""
@@ -513,21 +545,21 @@ class RegistrarPuller(doing.DoDoer):
                            and self.tyme < deadline):
                         yield tock
                     if doer.error is not None:
-                        self.results.append((url, {'transport_error': str(doer.error)}))
+                        self.record(url, {'transport_error': str(doer.error)})
                     elif not client.responses:
-                        self.results.append((url, 'timeout'))
+                        self.record(url, 'timeout')
                     else:
                         response = client.responses.popleft()
                         if response['status'] != 200:
-                            self.results.append((url, 'http_error'))
+                            self.record(url, 'http_error')
                         elif (response.get('headers', {}).get('content-type', '').split(';')[0]
                               != CESR_CONTENT_TYPE):
-                            self.results.append((url, 'invalid_content_type'))
+                            self.record(url, 'invalid_content_type')
                         else:
                             result = self.observer.observe(url, response['body'])
-                            self.results.append((url, result))
+                            self.record(url, result)
                 except OSError as error:
-                    self.results.append((url, {'transport_error': str(error)}))
+                    self.record(url, {'transport_error': str(error)})
                 finally:
                     if doer is not None and doer in self.doers:
                         self.remove([doer])
