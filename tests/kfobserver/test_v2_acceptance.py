@@ -1,4 +1,4 @@
-"""Native TEL guarantees retained from the retired second acceptance engine."""
+"""v2 TEL guarantees retained from the retired second acceptance engine."""
 from falcon import testing
 from keri import Vrsn_2_0
 from keri.acdc import blindate
@@ -19,7 +19,7 @@ def anchor(hab, regid, event):
     hab.interact(data=[dict(i=regid, s=event.sad['n'], d=event.said)])
 
 
-def test_native_ordering_replay_conflict_and_forward_progress():
+def test_v2_ordering_replay_conflict_and_forward_progress():
     """Independent intake never replaces accepted slots or regresses the head."""
     with (openHby(name='ordering-source', version=Vrsn_2_0) as source,
           openHby(name='ordering-cache', version=Vrsn_2_0) as receiver):
