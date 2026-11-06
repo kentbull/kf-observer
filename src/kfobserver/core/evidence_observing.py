@@ -16,11 +16,9 @@ from hio.base import doing
 from hio.core import http
 from keri import Vrsn_2_0
 from keri.acdc import Regery
-from keri.core import (BlindState, Blinder, BoundState, Codens, Counter,
-                       Kevery, Number, SerderACDC, query)
+from keri.core import Blinder, Codens, Counter, Kevery, Number, SerderACDC, query
 from keri.core.kraming import Pruner
-from keri.db.subing import Suber
-from keri.kering import ConfigurationError, KeriError, ValidationError
+from keri.kering import ConfigurationError
 from keri.app.httping import CESR_CONTENT_TYPE
 from keri.db import dbing, koming
 from keri.help import helping
@@ -204,7 +202,6 @@ class ObservedEvidence(doing.DoDoer):
         self.kvy = Kevery(db=hby.db, cf=self.cf, enableKram=True, lax=False, local=False)
         self.rgy = Regery(hby, baser=baser, name=hby.name, base=hby.base, temp=hby.temp)
         self.store = self.rgy.store
-        self.pendingOpenings = Suber(db=self.rgy.baser, subkey="observer.pending-openings.")
         self.pruner = Pruner(self.kvy.kramer, tock=1.0)
         self.observations = observations if observations is not None else ObservationBaser(
             name=hby.name, base=hby.base, temp=hby.temp)
@@ -224,7 +221,6 @@ class ObservedEvidence(doing.DoDoer):
         while True:
             self.kvy.processEscrows()
             self.rgy.processEscrows()
-            self._reconcileOpenings()
             yield tock
 
 
@@ -233,9 +229,10 @@ class ObservedEvidence(doing.DoDoer):
 
         Only an authorized publisher opts into retaining disclosed openings.
         Core ``Regery.ingest`` owns intake, acceptance, dependency escrows and
-        the disclosed-opening rule; this method summarizes its per-event
-        outcomes, with heads taken from accepted events in this response,
-        without another pending queue.
+        the disclosed-opening rule, and core ``Regery.processEscrows`` promotes
+        or drops escrowed openings; this method summarizes per-event outcomes,
+        with heads taken from accepted events in this response, and makes the
+        publish-gated retention call.
         """
         outcomes, refusal = self.rgy.ingest(raw, kvy=self.kvy)
         summary = dict(accepted={}, pending={}, rejected={}, heads={})
@@ -263,43 +260,8 @@ class ObservedEvidence(doing.DoDoer):
             if status == "accepted":
                 self.store.putOpening(event.said, outcome.opening)
             elif status == "pending":
-                existing = self.pendingOpenings.get(event.said)
-                if existing is not None and existing != outcome.opening.qb64:
-                    raise ValidationError("pending public opening is immutable")
-                self.pendingOpenings.put(event.said, outcome.opening.qb64)
-        self._reconcileOpenings()
+                self.store.escrowOpening(event.said, outcome.opening)
         return summary
-
-    def _reconcileOpenings(self):
-        """Promote authorized disclosures only after accepted TEL membership.
-
-        Keep exact core dependencies across restart, without a second body
-        queue or retry service. Removed/rejected dependencies lose their proof.
-        """
-        from keri.acdc.regeventing import vetBlind
-        for (said,), raw in list(self.pendingOpenings.getTopItemIter()):
-            event = self.store.event(said)
-            try:
-                if event is None or event.ilk != "bup":
-                    raise ValidationError("pending public opening has no BUP")
-                vetBlind(raw, blid=event.sad["b"])
-                accepted = self.store.seqSaider(event.sad["rd"], Number(numh=event.sad["n"]).num)
-                if accepted is not None and accepted.qb64 == said:
-                    for clan in (BlindState, BoundState):
-                        try:
-                            opening = Blinder(clan=clan, qb64=raw)
-                        except (KeriError, ValueError, TypeError):
-                            continue
-                        if opening.qb64 == raw:
-                            self.store.putOpening(said, opening)
-                            break
-                    else:
-                        raise ValidationError("invalid pending public opening")
-                elif self.store.escrowed(event.sad["rd"], Number(numh=event.sad["n"]).num, said):
-                    continue
-            except (KeriError, ValueError, TypeError):
-                logger.warning("Discarding invalid pending public opening %s", said)
-            self.pendingOpenings.rem(said)
 
 
     def clone(self, regks=None, sn=0):
