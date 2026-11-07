@@ -187,7 +187,7 @@ def test_put_introduces_remote_signer_for_authenticated_tel_query(tmp_path):
             attacker = attackerHby.makeHab(name="attacker")
             assert _signedTelQuery(client, signer, regk, endorser=attacker).status == falcon.HTTP_401
         assert client.simulate_post("/", body=_telQuery(signer, regk).raw,
-            headers={"Content-Type": CESR_CONTENT_TYPE}).status == falcon.HTTP_400
+            headers={"Content-Type": CESR_CONTENT_TYPE}).status == falcon.HTTP_401
 
         # Reopen the permission store, then revoke dynamic access without cutting a fixed reader.
         ctx.close()
