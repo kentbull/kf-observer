@@ -640,3 +640,14 @@ def test_health():
             assert response.json["status"] == "ok"
         finally:
             ctx.close()
+
+
+def test_observer_doist_tock_defaults_fast_and_follows_registry(monkeypatch):
+    from kfobserver.core import evidence
+
+    monkeypatch.delenv("KERI_DOIST_TOCK", raising=False)
+    assert evidence.doistTock() == evidence.OBSERVER_DOIST_TOCK == 0.00125
+    assert evidence.doistTock({"witnessMsg": 0.0}) == 0.00125
+    assert evidence.doistTock({"doist": 0.02}) == 0.02
+    monkeypatch.setenv("KERI_DOIST_TOCK", "0.005")
+    assert evidence.doistTock({"doist": 0.02}) == 0.005

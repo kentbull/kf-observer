@@ -219,7 +219,8 @@ def runObserver(args, expire=0.0):
             keypath=args.keypath, certpath=args.certpath, cafilepath=args.cafilepath)
         doers.extend(workers)
 
-        runController(doers=doers, expire=expire, tock=hby.tocks["doist"])
+        runController(doers=doers, expire=expire,
+                      tock=evidence.doistTock(hby.cf.get().get("tocks")))
     finally:
         if ctx is not None:
             ctx.close()

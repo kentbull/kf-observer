@@ -9,6 +9,7 @@ from pathlib import Path
 import falcon
 from hio.core import http
 from keri.app.indirecting import createHttpServer
+from keri.app.tocking import TOCKS, Tock, resolveTocks
 from keri.db.basing import BaserDoer
 from keri.core import Prefixer
 from keri.kering import ConfigurationError, KeriError
@@ -17,6 +18,21 @@ from kfobserver.core.evidence_observing import (
     ObservedEvidence, ReaderAccount, RegistrarPuller, sourceTrusts)
 from kfobserver.app.httping import preflightEnrollmentKel
 from kfobserver.core.evidence_querying import QueryEnd
+
+# 1.25 ms rather than KERIpy's 10 ms default: the observer answers reader queries
+# and drives registrar pulls on their latency path, so its tick was set for response
+# time over idle CPU. KERI_DOIST_TOCK or a tocks.doist config value still overrides it.
+OBSERVER_DOIST_TOCK = 0.00125
+OBSERVER_TOCKS = TOCKS | {"doist": Tock(env=TOCKS["doist"].env, default=OBSERVER_DOIST_TOCK)}
+
+
+def doistTock(cfTocks=None):
+    """Return the observer Doist tick from KERIpy's tock precedence.
+
+    KERI_DOIST_TOCK wins, then cfTocks["doist"] (a config file's tocks object),
+    then OBSERVER_DOIST_TOCK. Invalid values raise ConfigurationError.
+    """
+    return resolveTocks(cfTocks, tocks=OBSERVER_TOCKS)["doist"]
 
 
 class HealthEnd:
